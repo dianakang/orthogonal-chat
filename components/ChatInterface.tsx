@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ConversationSidebar from './ConversationSidebar';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
+import SkillsPanel from './SkillsPanel';
 import type { MessageData, ToolCallDisplay } from './MessageBubble';
 import type { Message } from '@/lib/db';
 
@@ -17,6 +18,7 @@ function dbMessageToDisplay(msg: Message): MessageData {
 }
 
 export default function ChatInterface() {
+  const [showSkills, setShowSkills] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -249,7 +251,22 @@ export default function ChatInterface() {
             </div>
             <h1 className="text-sm font-semibold text-zinc-100">Orthogonal Chat</h1>
           </div>
-          <span className="text-xs text-zinc-500">Powered by Claude + Orthogonal APIs</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-zinc-500 hidden sm:block">Powered by GPT-4o + Orthogonal APIs</span>
+            <button
+              onClick={() => setShowSkills((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                showSkills
+                  ? 'bg-accent text-white'
+                  : 'bg-surface-2 border border-surface-3 text-zinc-400 hover:text-zinc-100 hover:border-zinc-500'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Skills
+            </button>
+          </div>
         </header>
 
         {/* Messages */}
@@ -295,6 +312,8 @@ export default function ChatInterface() {
 
         <ChatInput onSend={handleSend} disabled={streaming} />
       </main>
+
+      {showSkills && <SkillsPanel onClose={() => setShowSkills(false)} />}
     </div>
   );
 }

@@ -9,7 +9,6 @@
     "db:init": "node -r dotenv/config lib/db-init.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.36.3",
     "dotenv": "^16.4.5",
     "next": "^15.1.0",
     "pg": "^8.13.0",
