@@ -38,9 +38,9 @@ export default function ChatInput({ onSend, disabled }: Props) {
   }
 
   return (
-    <div className="border-t border-surface-3 bg-surface-1 p-4">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-end gap-3 bg-surface-2 border border-surface-3 rounded-xl px-4 py-3 focus-within:border-accent transition-colors">
+    <div className="border-t border-surface-3 bg-surface-1/70 backdrop-blur p-3 sm:p-4">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-end gap-3 bg-surface-1 border border-surface-3 rounded-2xl px-4 py-3 shadow-sm focus-within:border-accent transition-colors">
           <textarea
             ref={textareaRef}
             value={value}
@@ -49,15 +49,15 @@ export default function ChatInput({ onSend, disabled }: Props) {
             disabled={disabled}
             placeholder={disabled ? 'Waiting for response…' : 'Ask anything — company info, contacts, web search…'}
             rows={1}
-            className="flex-1 bg-transparent resize-none outline-none text-sm text-zinc-100 placeholder:text-zinc-500 disabled:opacity-50 max-h-48 overflow-y-auto"
+            className="flex-1 bg-transparent resize-none outline-none text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-500 disabled:opacity-50 max-h-48 overflow-y-auto"
           />
           <button
             onClick={submit}
             disabled={disabled || !value.trim()}
-            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-accent hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            className="shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-accent hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
           >
             {disabled ? (
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
               </svg>
@@ -68,7 +68,7 @@ export default function ChatInput({ onSend, disabled }: Props) {
             )}
           </button>
         </div>
-        <p className="text-xs text-zinc-600 mt-2 text-center">
+        <p className="text-xs text-zinc-500 mt-2 text-center">
           Enter to send · Shift+Enter for new line
         </p>
       </div>

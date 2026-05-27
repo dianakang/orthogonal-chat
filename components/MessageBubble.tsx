@@ -28,7 +28,7 @@ function ToolCallBlock({ tool }: { tool: ToolCallDisplay }) {
 
   return (
     <div className="my-2 border border-surface-3 rounded-lg overflow-hidden text-xs">
-      <div className="flex items-center gap-2 px-3 py-2 bg-surface-2 text-zinc-400">
+      <div className="flex items-center gap-2 px-3 py-2 bg-surface-2 text-zinc-600 dark:text-zinc-400">
         <svg className="w-3.5 h-3.5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
@@ -38,13 +38,13 @@ function ToolCallBlock({ tool }: { tool: ToolCallDisplay }) {
         )}
       </div>
       <details className="group">
-        <summary className="px-3 py-1.5 cursor-pointer text-zinc-500 hover:text-zinc-300 list-none flex items-center gap-1">
+        <summary className="px-3 py-1.5 cursor-pointer text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 list-none flex items-center gap-1">
           <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           {tool.error ? 'View error' : 'View result'}
         </summary>
-        <pre className="px-3 py-2 overflow-x-auto text-zinc-400 border-t border-surface-3 max-h-48 overflow-y-auto">
+        <pre className="px-3 py-2 overflow-x-auto text-zinc-700 dark:text-zinc-300 border-t border-surface-3 max-h-48 overflow-y-auto">
           {tool.error
             ? tool.error
             : JSON.stringify(tool.result, null, 2)}
@@ -59,8 +59,8 @@ export default function MessageBubble({ message }: { message: MessageData }) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end px-4 py-2">
-        <div className="max-w-[75%] bg-accent text-white rounded-2xl rounded-tr-sm px-4 py-3 text-sm">
+      <div className="flex justify-end py-2">
+        <div className="max-w-[80%] bg-accent text-white rounded-2xl rounded-tr-sm px-4 py-3 text-sm shadow-sm">
           {message.content}
         </div>
       </div>
@@ -68,8 +68,8 @@ export default function MessageBubble({ message }: { message: MessageData }) {
   }
 
   return (
-    <div className="flex gap-3 px-4 py-2 max-w-3xl mx-auto w-full">
-      <div className="shrink-0 w-7 h-7 rounded-full bg-surface-3 flex items-center justify-center mt-0.5">
+    <div className="flex gap-3 py-3">
+      <div className="shrink-0 w-8 h-8 rounded-2xl bg-surface-2 border border-surface-3 flex items-center justify-center mt-0.5">
         <svg className="w-4 h-4 text-accent" fill="currentColor" viewBox="0 0 24 24">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
         </svg>
@@ -91,7 +91,7 @@ export default function MessageBubble({ message }: { message: MessageData }) {
         ))}
 
         {message.content && (
-          <div className="prose-chat text-sm text-zinc-100 leading-relaxed">
+          <div className="prose-chat text-sm text-zinc-900 dark:text-zinc-100 leading-relaxed">
             <ReactMarkdown>{message.content}</ReactMarkdown>
             {message.streaming && (
               <span className="inline-block w-2 h-4 bg-zinc-400 ml-0.5 animate-pulse align-middle" />

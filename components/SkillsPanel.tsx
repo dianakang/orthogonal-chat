@@ -31,7 +31,7 @@ function MethodBadge({ method }: { method: string }) {
     DELETE: 'bg-red-900/50 text-red-400 border-red-800',
   };
   return (
-    <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${colors[method] ?? 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
+    <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${colors[method] ?? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'}`}>
       {method}
     </span>
   );
@@ -48,7 +48,7 @@ function ApiCard({ api }: { api: ApiEntry }) {
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-zinc-100">{api.name}</span>
+            <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{api.name}</span>
             {api.verified && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-900/40 text-indigo-400 border border-indigo-800/50">
                 verified
@@ -74,8 +74,8 @@ function ApiCard({ api }: { api: ApiEntry }) {
             <div key={i} className="flex items-start gap-2 px-3 py-2 bg-surface-0">
               <MethodBadge method={ep.method} />
               <div className="flex-1 min-w-0">
-                <code className="text-[10px] text-zinc-400 font-mono">{ep.path}</code>
-                <p className="text-[11px] text-zinc-600 mt-0.5 line-clamp-2">{ep.description}</p>
+                <code className="text-[10px] text-zinc-500 dark:text-zinc-400 font-mono">{ep.path}</code>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-500 mt-0.5 line-clamp-2">{ep.description}</p>
               </div>
             </div>
           ))}
@@ -125,7 +125,7 @@ export default function SkillsPanel({ onClose }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3 shrink-0">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100">Available Skills</h2>
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Available Skills</h2>
           {!loading && (
             <p className="text-xs text-zinc-500 mt-0.5">
               {apis.length} APIs · {totalEndpoints} endpoints
@@ -153,7 +153,7 @@ export default function SkillsPanel({ onClose }: Props) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search APIs…"
-            className="flex-1 bg-transparent text-xs text-zinc-100 placeholder:text-zinc-500 outline-none"
+            className="flex-1 bg-transparent text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-500 outline-none"
           />
         </div>
       </div>

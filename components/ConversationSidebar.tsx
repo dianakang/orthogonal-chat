@@ -8,9 +8,10 @@ interface Props {
   onSelect: (id: string) => void;
   onNew: () => void;
   refreshTrigger: number;
+  onCollapse?: () => void;
 }
 
-export default function ConversationSidebar({ activeId, onSelect, onNew, refreshTrigger }: Props) {
+export default function ConversationSidebar({ activeId, onSelect, onNew, refreshTrigger, onCollapse }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -30,11 +31,22 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
   }
 
   return (
-    <aside className="flex flex-col w-64 border-r border-surface-3 bg-surface-1 shrink-0">
-      <div className="p-4 border-b border-surface-3">
+    <aside className="flex flex-col w-72 border-r border-surface-3 bg-surface-1 shrink-0">
+      <div className="p-4 border-b border-surface-3 flex items-center gap-2">
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            className="inline-flex items-center justify-center h-9 w-9 rounded-xl border border-surface-3 bg-surface-1 hover:bg-surface-2 transition-colors"
+            aria-label="Collapse sidebar"
+          >
+            <svg className="w-4 h-4 text-zinc-600 dark:text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={onNew}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-3 hover:bg-surface-2 text-sm font-medium transition-colors"
+          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-medium transition-colors border border-surface-3 text-zinc-800 dark:text-zinc-100"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -53,10 +65,10 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
             <div
               key={c.id}
               onClick={() => onSelect(c.id)}
-              className={`group flex items-center gap-2 px-3 py-2 mx-2 my-0.5 rounded-lg cursor-pointer transition-colors ${
+              className={`group flex items-center gap-2 px-3 py-2 mx-2 my-0.5 rounded-xl cursor-pointer transition-colors ${
                 c.id === activeId
-                  ? 'bg-surface-3 text-white'
-                  : 'hover:bg-surface-2 text-zinc-400 hover:text-zinc-100'
+                  ? 'bg-surface-2 text-zinc-900 dark:text-zinc-100'
+                  : 'hover:bg-surface-2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
               }`}
             >
               <svg className="w-4 h-4 shrink-0 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -65,7 +77,7 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
               <span className="flex-1 text-sm truncate">{c.title}</span>
               <button
                 onClick={(e) => handleDelete(c.id, e)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-red-400 transition-all"
+                className="opacity-0 group-hover:opacity-100 p-1 rounded-lg hover:text-red-500 transition-all"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

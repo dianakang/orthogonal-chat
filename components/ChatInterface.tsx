@@ -5,6 +5,7 @@ import ConversationSidebar from './ConversationSidebar';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
 import SkillsPanel from './SkillsPanel';
+import ThemeToggle from './ThemeToggle';
 import type { MessageData, ToolCallDisplay } from './MessageBubble';
 import type { Message } from '@/lib/db';
 
@@ -23,6 +24,7 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -233,32 +235,53 @@ export default function ChatInterface() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
-      <ConversationSidebar
-        activeId={conversationId}
-        onSelect={loadConversation}
-        onNew={startNewConversation}
-        refreshTrigger={sidebarRefresh}
-      />
+      {!sidebarCollapsed && (
+        <ConversationSidebar
+          activeId={conversationId}
+          onSelect={loadConversation}
+          onNew={startNewConversation}
+          refreshTrigger={sidebarRefresh}
+          onCollapse={() => setSidebarCollapsed(true)}
+        />
+      )}
 
-      <main className="flex flex-col flex-1 min-w-0">
-        {/* Header */}
-        <header className="flex items-center justify-between px-6 py-3 border-b border-surface-3 bg-surface-1 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-6 h-6 rounded bg-accent flex items-center justify-center">
-              <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+      <main className="relative flex flex-col flex-1 min-w-0">
+        {/* Top bar (Julius-like minimal controls) */}
+        <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-surface-3 bg-surface-1/70 backdrop-blur shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="inline-flex items-center justify-center h-9 w-9 rounded-xl border border-surface-3 bg-surface-1 hover:bg-surface-2 transition-colors"
+                aria-label="Open sidebar"
+              >
+                <svg className="w-4 h-4 text-zinc-600 dark:text-zinc-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
+
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-xl bg-accent flex items-center justify-center shrink-0">
+                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">Orthogonal Chat</div>
+                <div className="text-[11px] text-zinc-500 truncate hidden sm:block">Search & call real APIs with one key</div>
+              </div>
             </div>
-            <h1 className="text-sm font-semibold text-zinc-100">Orthogonal Chat</h1>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-zinc-500 hidden sm:block">Powered by GPT-4o + Orthogonal APIs</span>
+
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
             <button
               onClick={() => setShowSkills((v) => !v)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              className={`inline-flex items-center gap-2 h-9 px-3 rounded-xl text-xs font-medium border transition-colors ${
                 showSkills
-                  ? 'bg-accent text-white'
-                  : 'bg-surface-2 border border-surface-3 text-zinc-400 hover:text-zinc-100 hover:border-zinc-500'
+                  ? 'bg-accent text-white border-transparent'
+                  : 'bg-surface-1 border-surface-3 text-zinc-600 dark:text-zinc-300 hover:bg-surface-2'
               }`}
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -269,45 +292,50 @@ export default function ChatInterface() {
           </div>
         </header>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto py-4">
-          {isEmpty ? (
-            <div className="flex flex-col items-center justify-center h-full text-center px-6">
-              <div className="w-12 h-12 rounded-xl bg-surface-2 flex items-center justify-center mb-4">
-                <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-6">
+            {isEmpty ? (
+              <div className="pt-10 sm:pt-16">
+                <div className="max-w-2xl">
+                  <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                    What can I help you build or find?
+                  </h2>
+                  <p className="mt-3 text-sm sm:text-base text-zinc-600 dark:text-zinc-400">
+                    Ask in natural language. I’ll search Orthogonal’s catalog, fetch endpoint details, and call real APIs when needed.
+                  </p>
+                </div>
+
+                <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    'Find contacts at OpenAI',
+                    'Enrich company: stripe.com',
+                    'What APIs are available?',
+                    'Scrape https://example.com',
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => handleSend(suggestion)}
+                      disabled={streaming}
+                      className="text-left p-4 rounded-2xl bg-surface-1 border border-surface-3 hover:bg-surface-2 transition-colors"
+                    >
+                      <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{suggestion}</div>
+                      <div className="mt-1 text-xs text-zinc-500">
+                        Click to send
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <h2 className="text-lg font-semibold text-zinc-100 mb-2">What would you like to know?</h2>
-              <p className="text-sm text-zinc-500 max-w-sm">
-                Ask about companies, find contacts, search the web, or explore any of the 100+ APIs available through Orthogonal.
-              </p>
-              <div className="grid grid-cols-2 gap-3 mt-6 max-w-md w-full">
-                {[
-                  'Find contacts at OpenAI',
-                  'Enrich company: stripe.com',
-                  'What APIs are available?',
-                  'Scrape https://example.com',
-                ].map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    onClick={() => handleSend(suggestion)}
-                    disabled={streaming}
-                    className="text-left px-4 py-3 rounded-xl bg-surface-2 border border-surface-3 hover:border-accent text-xs text-zinc-400 hover:text-zinc-100 transition-all"
-                  >
-                    {suggestion}
-                  </button>
+            ) : (
+              <div className="space-y-1">
+                {messages.map((msg, i) => (
+                  <MessageBubble key={msg.id ?? i} message={msg} />
                 ))}
+                <div ref={bottomRef} />
               </div>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {messages.map((msg, i) => (
-                <MessageBubble key={msg.id ?? i} message={msg} />
-              ))}
-              <div ref={bottomRef} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         <ChatInput onSend={handleSend} disabled={streaming} />

@@ -18,13 +18,19 @@ async function orthogonalFetch<T>(
     signal: AbortSignal.timeout(60_000),
   });
 
-  const body = await res.json();
+  let body: any;
+  try {
+    body = await res.json();
+  } catch {
+    body = { success: false, error: `HTTP ${res.status}`, code: 'NON_JSON_RESPONSE' };
+  }
 
   if (!res.ok || !body.success) {
     throw new OrthogonalError(
-      body.error ?? `HTTP ${res.status}`,
+      body.error ?? body.message ?? `HTTP ${res.status}`,
       body.code ?? 'UNKNOWN',
-      res.status
+      res.status,
+      body
     );
   }
 
@@ -35,7 +41,8 @@ export class OrthogonalError extends Error {
   constructor(
     message: string,
     public code: string,
-    public status: number
+    public status: number,
+    public payload?: unknown
   ) {
     super(message);
     this.name = 'OrthogonalError';
@@ -151,9 +158,12 @@ export async function listEndpoints(
 }
 
 export async function searchApis(query: string): Promise<SearchResponse> {
+  if (!query?.trim()) {
+    throw new Error('Search query must be a non-empty string');
+  }
   return orthogonalFetch<SearchResponse>('/search', {
     method: 'POST',
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ prompt: query }),
   });
 }
 

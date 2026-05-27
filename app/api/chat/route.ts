@@ -17,9 +17,11 @@ When the user asks for information about companies, people, contacts, or anythin
 
 Workflow:
 1. Use search_orthogonal to discover the right API for the task.
-2. Use get_api_details if you need to understand required parameters.
+2. BEFORE calling run_orthogonal_api on a new endpoint, ALWAYS call get_api_details for that (api, path) and follow the required parameters exactly.
 3. Use run_orthogonal_api to execute the call and return real results.
 4. Summarize and present the data clearly.
+
+If a run_orthogonal_api call returns a 4xx/5xx error, read the error payload and adjust the request; do not guess parameter shapes.
 
 Be transparent when fetching data. If an API call fails or returns no results, explain gracefully and suggest alternatives.`;
 
@@ -94,9 +96,25 @@ export async function POST(req: Request) {
         const toolCallsForDb: Array<{ name: string; input: unknown; result: unknown }> = [];
         let finalResponseText = '';
 
-        // Agentic loop
-        while (true) {
-          const response = await chatCompletion(messages, ORTHOGONAL_TOOLS);
+        // Agentic loop — cap at 6 iterations to avoid rate-limit exhaustion
+        const MAX_ITERATIONS = 6;
+        let iterations = 0;
+        while (iterations < MAX_ITERATIONS) {
+          iterations++;
+          let response: Awaited<ReturnType<typeof chatCompletion>>;
+          try {
+            response = await chatCompletion(messages, ORTHOGONAL_TOOLS);
+          } catch (err) {
+            const isRateLimit =
+              err instanceof OrthogonalError &&
+              (err.status === 429 || err.message.includes('429'));
+            if (isRateLimit) {
+              send({ type: 'error', message: 'Rate limit reached — please wait a moment and try again.' });
+              controller.close();
+              return;
+            }
+            throw err;
+          }
           const choice = response.choices[0];
           const message = choice.message;
 
@@ -132,11 +150,14 @@ export async function POST(req: Request) {
                 toolResult = await executeOrthogonalTool(name, input);
               } catch (err) {
                 if (err instanceof OrthogonalError) {
-                  toolError = `${err.message} (code: ${err.code})`;
+                  toolError = `${err.message} (status: ${err.status}, code: ${err.code})`;
                 } else {
                   toolError = String(err);
                 }
-                toolResult = { error: toolError };
+                toolResult =
+                  err instanceof OrthogonalError
+                    ? { error: toolError, status: err.status, code: err.code, payload: err.payload ?? null }
+                    : { error: toolError };
               }
 
               send({ type: 'tool_result', name, result: toolResult, error: toolError });
@@ -160,6 +181,12 @@ export async function POST(req: Request) {
             }
             break;
           }
+        }
+
+        // If loop exited without a final text response, surface a fallback
+        if (!finalResponseText && iterations >= MAX_ITERATIONS) {
+          finalResponseText = "I wasn't able to complete the request — too many tool calls were needed. Please try a more specific question.";
+          send({ type: 'text', content: finalResponseText });
         }
 
         // Persist assistant message
