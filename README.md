@@ -1,13 +1,17 @@
 # Orthogonal Chat
 
-An AI chat assistant that surfaces real data through [Orthogonal's](https://orthogonal.com) unified API platform — company enrichment, contact lookup, web scraping, and 100+ more APIs — all through a single conversational interface.
+An AI chat assistant that surfaces real data through [Orthogonal's](https://orthogonal.com) unified API platform — company enrichment, contact lookup, web scraping, and 55+ more APIs — all through a single conversational interface.
 
 ## Stack
 
-- **Next.js 15** (App Router, Server Components, Route Handlers)
-- **GPT-4o-mini** via Orthogonal's OpenAI-compatible proxy — streaming responses with tool use
-- **PostgreSQL** — conversation and message persistence (raw SQL via `pg`)
-- **Tailwind CSS** — dark-mode UI
+| Layer | Technology |
+|---|---|
+| **Framework** | Next.js 15 (App Router, Server Components, Route Handlers) |
+| **LLM** | GPT-4o-mini via Orthogonal's OpenAI-compatible proxy |
+| **Database** | PostgreSQL — conversations, messages, company memory, context summaries (raw SQL via `pg`) |
+| **Auth** | Clerk — multi-user, all data scoped by `user_id` |
+| **Styling** | Tailwind CSS, dark-mode support |
+| **Streaming** | Server-Sent Events (SSE) for real-time token + tool-call updates |
 
 ---
 
@@ -16,7 +20,11 @@ An AI chat assistant that surfaces real data through [Orthogonal's](https://orth
 ### 1. Prerequisites
 
 - Node 18+
-- PostgreSQL running locally (`createdb orthogonal_chat`)
+- PostgreSQL running locally
+
+```bash
+createdb orthogonal_chat
+```
 
 ### 2. Environment
 
@@ -26,16 +34,45 @@ cp .env.example .env.local
 
 Fill in your keys:
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
+```env
 ORTHOGONAL_API_KEY=orth_live_...
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/orthogonal_chat
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/chat
+NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/chat
 ```
 
 ### 3. Database
 
 ```bash
 npm run db:init
+```
+
+This runs `lib/schema.sql`, which creates all tables, indexes, and triggers. Re-running is safe (`CREATE TABLE IF NOT EXISTS`).
+
+Two additional tables must be created once (run in psql):
+
+```sql
+CREATE TABLE IF NOT EXISTS company_memory (
+  user_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}',
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,
+  covers_message_count INTEGER NOT NULL DEFAULT 0,
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ```
 
 ### 4. Run
@@ -48,143 +85,267 @@ npm run dev
 
 ---
 
-## How It Works
+## System Architecture
 
-1. **User sends a message** → `POST /api/chat` (SSE stream)
-2. **Context window built** from Postgres history, trimmed to ≤80K tokens oldest-first
-3. **Claude streams a response** with access to 4 Orthogonal tools:
-   - `search_orthogonal` — natural-language API discovery
-   - `list_orthogonal_apis` — browse the full catalog
-   - `get_api_details` — inspect endpoint parameters
-   - `run_orthogonal_api` — execute any API call with real data
-4. **Tool calls are transparent** — the UI shows "Searched Orthogonal", "Called API", with expandable result panels
-5. **Final response + tool call log** are persisted to Postgres (assistant message + JSONB `tool_calls` array in a single transaction)
-6. **Conversation auto-titles** itself from the first message (a lightweight `gpt-4o-mini` call before the main stream begins)
+Orthogonal is the **single external gateway** for both the LLM and all data API calls. There is no separate OpenAI connection — `gpt-4o-mini` is accessed through Orthogonal's proxy, and every tool execution goes through Orthogonal's `/run` endpoint.
+
+```mermaid
+flowchart TD
+    Browser(["Browser"])
+
+    subgraph Auth["Clerk Authentication"]
+        MW["clerkMiddleware\nroute auth guard"]
+        ClerkUI["Hosted sign-in / sign-up"]
+    end
+
+    subgraph App["Next.js 15  —  App Router"]
+        direction TB
+
+        subgraph Routes["Route Handlers"]
+            ChatRoute["POST /api/chat\nSSE stream"]
+            ConvRoutes["/api/conversations/**\nCRUD"]
+            HealthRoute["GET /api/health"]
+        end
+
+        subgraph Singletons["In-Process Singletons"]
+            TC["ToolCache\nsearch: 5 min TTL\ndetails: 30 min TTL\nin-flight dedup"]
+            AH["ApiHealthTracker\n20-sample rolling window\nerrorRate · avgMs"]
+        end
+
+        subgraph Loop["Agentic Loop  max 6 iterations"]
+            LLM["chatCompletion\ngpt-4o-mini"]
+            Tools["Tool Execution\nretry + backoff"]
+        end
+
+        subgraph BG["Post-Response  non-blocking"]
+            CMem["Company Memory\nextract + upsert"]
+            Compact["Context Compaction\nLLM summarise oldest ½"]
+        end
+    end
+
+    subgraph PG["PostgreSQL"]
+        T1[("conversations")]
+        T2[("messages")]
+        T3[("company_memory")]
+        T4[("conversation_summaries")]
+    end
+
+    subgraph Orth["Orthogonal API  —  single key"]
+        O1["/run openai → gpt-4o-mini"]
+        O2["/search  natural-language discovery"]
+        O3["/details  endpoint schema"]
+        O4["/run ‹api-slug›  55+ data APIs"]
+        O5["/list-endpoints"]
+    end
+
+    Browser -- "page requests" --> MW
+    MW -- "unauthenticated" --> ClerkUI
+    MW -- "authenticated" --> Routes
+    ChatRoute -- "SSE events\ntext · tool_* · health\ncontext_pressure · done" --> Browser
+
+    ChatRoute <--> TC & AH
+    ChatRoute <--> T1 & T2 & T3 & T4
+    ChatRoute --> Loop
+    Loop --> BG
+
+    LLM --> O1
+    Tools <--> TC
+    TC --> O2 & O3
+    Tools --> O4 & O5
+
+    BG --> T3 & T4
+    Compact --> O1
+```
 
 ---
 
-## Context Window Management
+## How It Works
 
-Each message stores a `token_estimate` (chars ÷ 4). When building the context for a new request:
-
-- Walk from newest → oldest, accumulating estimated tokens
-- Always include at least the last 8 messages regardless of size
-- Stop adding older messages when total exceeds **80 000 tokens**
-- Inject a truncation notice at the cut point so Claude knows history was omitted
-
-This keeps responses fast and costs predictable without needing a separate summarization step.
+1. **User sends a message** → `POST /api/chat` opens an SSE stream
+2. **Company memory** from past sessions is injected into the system prompt
+3. **Context window** is built from Postgres history + any stored summary, trimmed to ≤ 80K tokens
+4. **GPT-4o-mini** runs an agentic loop (max 6 iterations) with 4 Orthogonal tools:
+   - `search_orthogonal` — natural-language API discovery (cached 5 min)
+   - `list_orthogonal_apis` — browse the full catalog
+   - `get_api_details` — inspect endpoint parameters (cached 30 min)
+   - `run_orthogonal_api` — execute any API call with real data
+5. **Tool calls are transparent** — the UI shows each step with expandable result panels and per-call latency
+6. **Health events stream live** — if Orthogonal is slow or erroring, the header chip and status text update in real time
+7. **Final response + tool log** are persisted atomically to Postgres
+8. **Post-response background work** runs without blocking the user:
+   - Company facts extracted from tool results → upserted to `company_memory`
+   - If the conversation is large, older messages are summarised by the LLM and stored in `conversation_summaries`
+9. **Conversation title** is generated asynchronously — the new conversation appears immediately; the title updates once generated
 
 ---
 
 ## System Design
 
-### Architecture (current)
-
-Orthogonal is the single external gateway for **both** the LLM and all data API calls. There is no separate Anthropic connection — `gpt-4o-mini` is accessed through Orthogonal's OpenAI-compatible proxy, and every tool execution also goes through Orthogonal's `/run` endpoint.
-
-```
-Browser ──SSE──▶ Next.js Route Handler (/api/chat)
-                    │
-                    ├── PostgreSQL
-                    │     ├── conversations (UUID, title, timestamps)
-                    │     └── messages (UUID, role, content, tool_calls JSONB, token_estimate)
-                    │
-                    └── Orthogonal API (single key, single base URL)
-                          ├── /run  openai → gpt-4o-mini  (LLM completions + title generation)
-                          ├── /search                      (natural-language API discovery)
-                          ├── /list-endpoints              (full catalog browse)
-                          ├── /details                     (endpoint parameter inspection)
-                          └── /run  <api-slug>             (55+ real-world data APIs)
-```
-
-### Database
-
-**PostgreSQL** — the only datastore. Two tables, six objects:
-
-| Object | Purpose |
-|---|---|
-| `conversations` | One row per thread; `title`, `created_at`, `updated_at` |
-| `messages` | Append-only log; `role`, `content`, `tool_calls` (JSONB), `token_estimate` |
-| `messages_conversation_id_idx` | Filters messages by conversation — used on every load |
-| `messages_created_at_idx` | Global time-ordering (used for future search) |
-| `conversations_updated_at_idx DESC` | Sort sidebar by most-recent activity |
-| `update_conversation_timestamp` trigger | Auto-bumps `conversations.updated_at` on message insert — no application-layer UPDATE needed |
-
-UUIDs are generated in-database via `pgcrypto` (`gen_random_uuid()`). Tool call payloads are stored as JSONB so they are queryable without schema changes as new tools are added.
-
-The connection pool is configured at **20 max connections**, 30 s idle timeout, 5 s connection timeout — sized for a single Node process. Each request acquires a client, runs its queries, and releases immediately; the assistant message is written inside a `BEGIN / COMMIT` transaction to ensure the tool_calls array and message content land atomically.
-
-### Request lifecycle
+### Request Lifecycle
 
 ```
 POST /api/chat
   │
-  ├─ 1. Upsert conversation (INSERT if new, SELECT if existing)
-  ├─ 2. INSERT user message
-  ├─ 3. Load history → buildContextWindow (trim to ≤80K tokens)
+  ├─ 1. Auth check (Clerk userId) — 401 if missing
+  ├─ 2. Emit health SSE event if Orthogonal is already degraded
+  ├─ 3. Upsert conversation (INSERT with placeholder title → generate real title async)
+  ├─ 4. Promise.all: INSERT user message + SELECT history + loadSummary()
+  ├─ 5. Inject company memory into system prompt
+  ├─ 6. buildContextWindow() — trim to ≤ 80K tokens; inject stored summary if present
+  ├─ 7. Emit context_pressure SSE event if > 70% full
   │
   └─ Agentic loop (max 6 iterations):
-       ├─ chatCompletion → Orthogonal /run openai
+       ├─ chatCompletion → Orthogonal /run openai (retry w/ backoff on 5xx)
        ├─ if finish_reason == "tool_calls":
-       │    ├─ executeOrthogonalTool for each call (sequential)
-       │    ├─ SSE: tool_start + tool_result events
-       │    └─ append tool results, continue loop
+       │    ├─ for each tool:
+       │    │    ├─ check in-process cache (search / details)
+       │    │    ├─ execute via Orthogonal (retry on 5xx; fail-fast on 4xx)
+       │    │    ├─ on 400: auto-fetch endpoint schema, embed hint in error result
+       │    │    │    → if path has unsubstituted {variables}, say so explicitly
+       │    │    ├─ SSE: tool_start + tool_result (latencyMs, retrying flag)
+       │    │    └─ emit health SSE if slow (> 5 s) or errored
+       │    └─ append results, continue loop
        └─ if finish_reason == "stop":
             ├─ stream text word-by-word over SSE
             ├─ INSERT assistant message + JSONB tool log (transaction)
-            └─ SSE: done
+            ├─ SSE: done
+            └─ Background (non-blocking):
+                 ├─ extract + upsert company facts → company_memory
+                 └─ if needsCompaction: LLM summarises oldest half → conversation_summaries
 ```
 
-The 6-iteration cap prevents runaway tool chains from exhausting the Orthogonal quota. If the cap is hit, the user gets a graceful fallback message rather than a silent hang.
+### Database Schema
 
-### Scaling
+Four tables, all data scoped by `user_id`:
 
-The current build runs on a single Next.js process with a direct Postgres connection — fine for a demo but not production. Here's the design path for each layer when load grows:
+| Table | Purpose | Key columns |
+|---|---|---|
+| `conversations` | One row per thread | `UUID`, `user_id`, `title`, `updated_at` (auto-bumped by trigger) |
+| `messages` | Append-only message log | `user_id`, `role`, `content`, `tool_calls` (JSONB), `token_estimate` |
+| `company_memory` | Cross-session company facts | `(user_id, slug)` PK, `data` JSONB merged on upsert |
+| `conversation_summaries` | LLM-generated compaction summaries | `conversation_id` FK, `summary` text, `covers_message_count` |
 
-#### Database
+Key indexes: per-conversation message load, sidebar sort by recency (`conversations.user_id, updated_at DESC`), company memory by `last_seen_at`. UUIDs via `pgcrypto`. A trigger auto-bumps `conversations.updated_at` on each new message.
 
-- **Indexes already in place** cover the two hot paths: per-conversation message load and sidebar sort. No schema change needed to handle 10× traffic.
-- **Partition `messages` by `conversation_id` hash** once row count exceeds ~50M — keeps each partition's index small.
-- **Redis cache layer** for repeated message-list reads (TTL ≈ 5 min, invalidated on new message insert). Saves a round-trip on every SSE stream open.
-- **Full-text search**: add a `tsvector` generated column + GIN index on `messages.content` for conversation search within Postgres. Migrate to Elasticsearch only at cross-user or semantic-search scale.
+### Speed Optimisations
 
-#### API / Concurrency
+| Technique | Where | Benefit |
+|---|---|---|
+| Async title generation | `app/api/chat/route.ts` | Removes a blocking LLM call from the critical path; TTFT drops ~500 ms |
+| Parallel DB ops | `app/api/chat/route.ts` | `Promise.all` for message insert + history fetch + summary load |
+| In-process tool cache | `lib/tool-cache.ts` | `search_orthogonal` (5 min TTL) and `get_api_details` (30 min TTL) skip network on cache hit |
+| Thundering-herd dedup | `lib/tool-cache.ts` | Concurrent cache misses for the same key share one in-flight fetch via `Map<string, Promise>` |
+| Retry with backoff | `lib/orthogonal.ts` | 5xx / network errors retry up to 3× (800 ms, 1.6 s); 4xx fail fast |
 
-**Horizontal Next.js replicas** behind a load balancer (Vercel Edge, Railway, ECS) — each SSE stream is fully stateless, holding its own Orthogonal HTTP connection. No shared in-process state, safe to run N replicas.
+### Context Window Management
 
-**Orthogonal API**
-- Tool calls within a single turn are sequential today (Claude issues them one at a time). If Claude ever returns multiple `tool_calls` in one turn, batch with `Promise.all` for parallelism.
-- Every `orthogonalFetch` already sets `AbortSignal.timeout(60_000)`. On timeout or `UPSTREAM_ERROR`, the error is fed back to the model so it can explain and suggest alternatives rather than crashing.
-- At high volume: queue requests per user with Redis + BullMQ; return a `busy` SSE event when the queue is full rather than blocking the HTTP response.
+Token budget: **80,000 tokens** (estimated at `chars ÷ 4`).
 
-**LLM (gpt-4o-mini via Orthogonal)**
-- Non-streaming today (full JSON response before word-by-word SSE emission). Switch to `stream: true` on the Orthogonal `/run` call to reduce time-to-first-token for long responses.
-- Retry with exponential backoff on 429s (rate-limit handler already in place in `route.ts`).
+**Per-request (build phase):**
+- Newest → oldest; always keep the last 8 messages verbatim
+- Stop at 70% of budget (56K tokens) — emit `context_pressure` SSE if threshold exceeded
+- Inject stored summary at the front of the window when available
 
-#### Authentication & multi-tenancy
+**Background summarisation (post-response):**
+- After each response, if total tokens exceed the 70% threshold, the oldest half of messages is summarised by the LLM
+- Summary stored in `conversation_summaries`; prior summaries for that conversation are deleted
+- Future requests load the summary instead of the raw messages
 
-- Add `user_id UUID` to `conversations` (and propagate to `messages` via FK or denormalized column).
-- Use NextAuth or Clerk for session cookies — no Postgres schema change beyond the FK.
-- Enable Postgres row-level security: `POLICY ON conversations USING (user_id = current_setting('app.user_id')::uuid)` so a misconfigured query can never leak another user's data.
+**Client visibility:**
+- `context_pressure` SSE event → inline `NoticeBanner` in the chat
+- Banner text distinguishes "getting large" (70–90%) from "nearly full" (> 90%)
 
-#### Observability
+### Company Memory
 
-- Propagate Orthogonal's `requestId` (returned on every `/run` response) through structured JSON logs for end-to-end tracing.
-- Accumulate the `cost` field from each `run_orthogonal_api` response into a per-conversation total; expose it in the UI and aggregate per-user per-month for billing visibility.
-- Instrument the agentic loop iteration count and tool call latency with OpenTelemetry — high iteration counts or slow tools are the primary cost and latency drivers.
+After each assistant response, tool results are scanned for company identifiers (domain, name, industry, employee count, funding, etc.). Extracted facts are upserted into `company_memory` with a JSONB merge so data accumulates across sessions.
+
+At the start of each request, the 15 most recently seen companies for that user are injected into the system prompt under a `## Company Memory` heading — giving the model context about previously researched companies without spending tokens on full conversation history.
+
+### System Health Visibility
+
+`lib/api-health.ts` maintains a rolling 20-sample window of latency and error rate for the Orthogonal API. Degraded = `errorRate ≥ 40%` or `avgMs ≥ 8 s`.
+
+Health SSE events fire at three points:
+
+1. **Pre-request** — if already degraded when the message arrives
+2. **Post-tool-call** — after a slow (> 5 s) or failed call
+3. **Recovery** — once error rate drops and latency normalises
+
+The `HealthChip` in the chat header reflects current state:
+- **Hidden** — healthy, no recent events
+- **Amber "Degraded / Slow (Xs)"** — degraded state
+- **Green "API recovered"** — auto-dismisses after 8 seconds
+
+Tool call blocks show per-call latency; calls over 4 s get an amber ⚠ marker. A `GET /api/health` endpoint returns machine-readable status (service health, avg latency, error rate, cache size).
+
+### Tool Call Error Recovery
+
+When `run_orthogonal_api` returns a 400:
+
+1. The server immediately calls `get_api_details` for that endpoint (0 ms if already cached)
+2. The endpoint schema + a targeted hint are embedded in the error result returned to the LLM
+3. If the path still contains unsubstituted template variables (`{domain}`, `[id]`, `:slug`), the hint calls this out explicitly: the LLM must substitute real values into the path string, not pass them in the request body
+4. The UI shows a grey "Retrying…" badge instead of a red "Error" — the self-correction is invisible to the user
+
+The system prompt and tool descriptions reinforce this at every turn:
+> "PATH PARAMETERS: If the path contains template variables like {company_id}, [domain], or :slug, you MUST substitute actual values directly into the path string before calling run_orthogonal_api."
+
+### Concurrency & Multi-User Safety
+
+- All DB queries are scoped by `user_id` at the query level; each route independently authenticates via Clerk before touching the DB
+- The `pg` pool (max 20 connections) is shared across concurrent requests; each request acquires, queries, and releases immediately
+- `ToolCache` is safe for concurrent access because Node.js is single-threaded; no locks needed
+- Thundering-herd guard means N simultaneous users making the same search share one network call
+- Tool calls within a single turn execute serially to avoid rate-limit amplification
+
+### UI Components
+
+| Component | Purpose |
+|---|---|
+| `ChatInterface` | Root chat shell — sidebar toggle, health chip, SSE event routing |
+| `ConversationSidebar` | Thread list with error state + retry button; auto-collapses on mobile |
+| `MessageBubble` | Renders user/assistant bubbles, tool call blocks (expandable), and system notice banners |
+| `SkillsPanel` | Slide-out panel of suggested prompts grouped by API category |
+| `ThemeProvider` / `ThemeToggle` | Dark/light mode with system preference detection |
+
+### Scaling Path
+
+| Layer | Now | Next step |
+|---|---|---|
+| Next.js | Single process | Horizontal replicas — SSE streams are stateless |
+| Postgres | Direct pool (max 20) | PgBouncer or connection-string pooling on Railway/Supabase |
+| Tool cache | In-process | Redis with same TTLs for shared cache across replicas |
+| Orthogonal rate limits | Retry w/ backoff | BullMQ queue per user; `busy` SSE event when queued |
+| Auth | Clerk, query-level user scoping | Add Postgres row-level security as defence-in-depth |
+| Observability | `console.error` | Propagate Orthogonal `requestId` through structured JSON logs; OpenTelemetry on agentic loop iterations and tool latency |
+
+---
+
+## Known Build Configuration
+
+Next.js 15 disables the webpack build worker when a custom `webpack` function is present in `next.config.ts`. This causes only the client bundle to compile, leaving `.next/server/` empty and producing 500 errors for all page routes. The fix:
+
+```ts
+// next.config.ts
+const nextConfig: NextConfig = {
+  serverExternalPackages: ['pg'],
+  experimental: {
+    webpackBuildWorker: true, // force server + edge compilation even with custom webpack config
+  },
+};
+```
 
 ---
 
 ## What I'd Do With More Time
 
-1. **Auth** — NextAuth with GitHub/Google OAuth; add `user_id` FK to `conversations`, enable Postgres row-level security so queries can never leak across users
-2. **True LLM streaming** — pass `stream: true` through Orthogonal's `/run` endpoint to reduce time-to-first-token; today the full JSON completes before any text is emitted
-3. **Redis cache + rate-limit queue** — cache per-conversation message lists (TTL 5 min, invalidate on insert); use BullMQ to queue excess Orthogonal requests per user rather than hard-failing
-4. **Message search** — add a `tsvector` generated column + GIN index on `messages.content` for full-text search within Postgres
-5. **Observability** — propagate Orthogonal's `requestId` through structured JSON logs; instrument agentic loop iteration count and per-tool latency with OpenTelemetry
-6. **Streaming tool results** — show live Orthogonal response as it arrives rather than waiting for the full JSON
-7. **Conversation branching** — fork from any message to explore a different answer path
-8. **Orthogonal cost tracking** — show per-message API spend in the UI (the `cost` field is already returned on every `/run` response)
-9. **Model selection** — let users swap the LLM (e.g. GPT-4o for harder tasks, a faster/cheaper model for simple lookups)
-10. **Export** — download conversation as Markdown or JSON
-11. **Deploy** — Railway (Postgres + Next.js in one click) or Vercel + Supabase
+1. **True LLM streaming** — pass `stream: true` through Orthogonal's proxy to reduce time-to-first-token; currently the full JSON completes before text is emitted
+2. **Redis cache + rate-limit queue** — shared tool cache across replicas; BullMQ to queue excess Orthogonal requests rather than hard-failing
+3. **Postgres row-level security** — defence-in-depth so a misconfigured query can never leak another user's data
+4. **Message search** — `tsvector` generated column + GIN index on `messages.content` for full-text search
+5. **Observability** — structured JSON logs with Orthogonal `requestId`; OpenTelemetry on agentic loop and tool latency
+6. **Orthogonal cost tracking** — accumulate the `cost` field returned on every `/run` response; show per-conversation spend in the UI
+7. **Model selection** — let users swap the LLM (GPT-4o for harder tasks, a cheaper model for simple lookups)
+8. **Conversation branching** — fork from any message to explore a different answer path
+9. **Export** — download conversation as Markdown or JSON
+10. **Deploy** — Railway (Postgres + Next.js in one click) or Vercel + Supabase

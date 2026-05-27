@@ -8,6 +8,7 @@ import SkillsPanel from './SkillsPanel';
 import ThemeToggle from './ThemeToggle';
 import type { MessageData, ToolCallDisplay } from './MessageBubble';
 import type { Message } from '@/lib/db';
+import { UserButton } from '@clerk/nextjs';
 
 function OrthLogoMark({ className }: { className?: string }) {
   return (
@@ -15,6 +16,34 @@ function OrthLogoMark({ className }: { className?: string }) {
       <path d="M32 32V6A26 26 0 0 1 58 32H32Z" fill="currentColor" />
       <path d="M32 32V58A26 26 0 0 1 6 32H32Z" fill="currentColor" />
     </svg>
+  );
+}
+
+// ── Health chip shown in the header ──────────────────────────────────────────
+interface HealthState {
+  healthy: boolean;
+  message: string;
+  avgMs?: number;
+}
+
+function HealthChip({ health }: { health: HealthState | null }) {
+  if (!health) return null;
+  if (health.healthy) {
+    return (
+      <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800 text-xs text-green-700 dark:text-green-400">
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+        API recovered
+      </div>
+    );
+  }
+  return (
+    <div
+      title={health.message}
+      className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400 max-w-[220px]"
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse" />
+      <span className="truncate">{health.avgMs && health.avgMs > 4000 ? `Slow (${(health.avgMs / 1000).toFixed(1)}s)` : 'Degraded'}</span>
+    </div>
   );
 }
 
@@ -34,6 +63,9 @@ export default function ChatInterface() {
   const [streaming, setStreaming] = useState(false);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Health chip: null = no event yet, cleared 8s after recovery
+  const [health, setHealth] = useState<HealthState | null>(null);
+  const healthTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const loadRequestRef = useRef(0);
@@ -57,6 +89,15 @@ export default function ChatInterface() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  function updateHealth(newHealth: HealthState) {
+    if (healthTimerRef.current) clearTimeout(healthTimerRef.current);
+    setHealth(newHealth);
+    if (newHealth.healthy) {
+      // Auto-dismiss recovery notice after 8 seconds
+      healthTimerRef.current = setTimeout(() => setHealth(null), 8000);
+    }
+  }
 
   async function loadConversation(id: string) {
     const requestId = ++loadRequestRef.current;
@@ -131,7 +172,17 @@ export default function ChatInterface() {
         signal: abortRef.current.signal,
       });
 
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Request failed (HTTP ${res.status})`);
+      }
+
       if (!res.body) throw new Error('No response body');
+      const contentType = res.headers.get('content-type') ?? '';
+      if (!contentType.includes('text/event-stream')) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Unexpected response type: ${contentType}`);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -158,6 +209,14 @@ export default function ChatInterface() {
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : err && typeof err === 'object' && 'type' in err
+              ? `Network error: ${(err as { type?: string }).type}`
+              : 'Something went wrong. Please try again.';
       setMessages((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
@@ -166,7 +225,7 @@ export default function ChatInterface() {
             ...last,
             streaming: false,
             statusText: undefined,
-            content: last.content || 'Something went wrong. Please try again.',
+            content: last.content || message,
           };
         }
         return updated;
@@ -174,7 +233,6 @@ export default function ChatInterface() {
     } finally {
       setStreaming(false);
       setSidebarRefresh((n) => n + 1);
-      // Clear streaming flag on last assistant message
       setMessages((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
@@ -192,6 +250,51 @@ export default function ChatInterface() {
         const conv = event.conversation as { id: string };
         setConversationId(conv.id);
         setSidebarRefresh((n) => n + 1);
+        break;
+      }
+
+      case 'title_updated': {
+        // Update sidebar without full refresh so it reflects the real title
+        setSidebarRefresh((n) => n + 1);
+        break;
+      }
+
+      case 'health': {
+        updateHealth({
+          healthy: Boolean(event.healthy),
+          message: event.message as string,
+          avgMs: event.avgMs as number | undefined,
+        });
+        // If degraded, also inject a notice into the message stream
+        if (!event.healthy) {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...last,
+                statusText: event.message as string,
+              };
+            }
+            return updated;
+          });
+        }
+        break;
+      }
+
+      case 'context_pressure': {
+        // Show a notice above the current assistant message
+        const noticeMsg: MessageData = {
+          role: 'assistant',
+          kind: 'notice',
+          content: event.message as string,
+        };
+        setMessages((prev) => {
+          // Insert the notice just before the streaming assistant message
+          const idx = prev.findLastIndex((m) => m.role === 'assistant' && m.streaming);
+          if (idx < 0) return [...prev, noticeMsg];
+          return [...prev.slice(0, idx), noticeMsg, ...prev.slice(idx)];
+        });
         break;
       }
 
@@ -253,9 +356,15 @@ export default function ChatInterface() {
                 ...toolCalls[idx],
                 result: event.result,
                 error: (event.error as string | null) ?? null,
+                latencyMs: event.latencyMs as number | undefined,
+                retrying: (event.retrying as boolean | undefined) ?? false,
               };
             }
-            updated[updated.length - 1] = { ...last, tool_calls: toolCalls, statusText: 'Processing results…' };
+            updated[updated.length - 1] = {
+              ...last,
+              tool_calls: toolCalls,
+              statusText: event.retrying ? 'Adjusting parameters…' : 'Processing results…',
+            };
           }
           return updated;
         });
@@ -306,7 +415,6 @@ export default function ChatInterface() {
       )}
 
       <main className="relative flex flex-col flex-1 min-w-0">
-        {/* Top bar (Julius-like minimal controls) */}
         <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-surface-3 bg-surface-1/70 backdrop-blur shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             {sidebarCollapsed && (
@@ -333,7 +441,9 @@ export default function ChatInterface() {
           </div>
 
           <div className="flex items-center gap-2">
+            <HealthChip health={health} />
             <ThemeToggle />
+            <UserButton appearance={{ elements: { avatarBox: 'h-8 w-8' } }} />
             <button
               onClick={() => setShowSkills((v) => !v)}
               className={`inline-flex items-center gap-2 h-9 px-3 rounded-xl text-xs font-medium border transition-colors ${
@@ -350,7 +460,6 @@ export default function ChatInterface() {
           </div>
         </header>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-6">
             {isEmpty ? (
@@ -360,7 +469,7 @@ export default function ChatInterface() {
                     What can I help you build or find?
                   </h2>
                   <p className="mt-3 text-sm sm:text-base text-zinc-600 dark:text-zinc-400">
-                    Ask in natural language. I’ll search Orthogonal’s catalog, fetch endpoint details, and call real APIs when needed.
+                    Ask in natural language. I'll search Orthogonal's catalog, fetch endpoint details, and call real APIs when needed.
                   </p>
                 </div>
 
@@ -378,9 +487,7 @@ export default function ChatInterface() {
                       className="text-left p-4 rounded-2xl bg-surface-1 border border-surface-3 hover:bg-surface-2 transition-colors"
                     >
                       <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{suggestion}</div>
-                      <div className="mt-1 text-xs text-zinc-500">
-                        Click to send
-                      </div>
+                      <div className="mt-1 text-xs text-zinc-500">Click to send</div>
                     </button>
                   ))}
                 </div>

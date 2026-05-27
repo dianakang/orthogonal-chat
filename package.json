@@ -9,6 +9,7 @@
     "db:init": "node lib/db-init.js"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.4.1",
     "dotenv": "^16.4.5",
     "next": "^15.1.0",
     "pg": "^8.13.0",
