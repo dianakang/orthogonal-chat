@@ -9,18 +9,26 @@ interface Props {
   onNew: () => void;
   refreshTrigger: number;
   onCollapse?: () => void;
+  className?: string;
 }
 
-export default function ConversationSidebar({ activeId, onSelect, onNew, refreshTrigger, onCollapse }: Props) {
+export default function ConversationSidebar({ activeId, onSelect, onNew, refreshTrigger, onCollapse, className }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
+  function loadConversations() {
+    setLoading(true);
+    setError(false);
     fetch('/api/conversations')
       .then((r) => r.json())
       .then((d) => setConversations(d.conversations ?? []))
-      .catch(console.error)
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadConversations();
   }, [refreshTrigger]);
 
   async function handleDelete(id: string, e: React.MouseEvent) {
@@ -31,7 +39,7 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
   }
 
   return (
-    <aside className="flex flex-col w-72 border-r border-surface-3 bg-surface-1 shrink-0">
+    <aside className={`flex flex-col w-72 border-r border-surface-3 bg-surface-1 shrink-0 ${className ?? ''}`}>
       <div className="p-4 border-b border-surface-3 flex items-center gap-2">
         {onCollapse && (
           <button
@@ -46,7 +54,7 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
         )}
         <button
           onClick={onNew}
-          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-2 hover:bg-surface-3 text-sm font-medium transition-colors border border-surface-3 text-zinc-800 dark:text-zinc-100"
+          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-surface-1 hover:bg-surface-2 text-sm font-medium transition-colors border border-surface-3 text-zinc-800 dark:text-zinc-100"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -58,6 +66,16 @@ export default function ConversationSidebar({ activeId, onSelect, onNew, refresh
       <div className="flex-1 overflow-y-auto py-2">
         {loading ? (
           <div className="px-4 py-8 text-center text-zinc-500 text-sm">Loading…</div>
+        ) : error ? (
+          <div className="px-4 py-8 text-center text-sm">
+            <p className="text-zinc-500 mb-3">Could not load conversations</p>
+            <button
+              onClick={loadConversations}
+              className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 hover:bg-surface-3 border border-surface-3 text-zinc-700 dark:text-zinc-300 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         ) : conversations.length === 0 ? (
           <div className="px-4 py-8 text-center text-zinc-500 text-sm">No conversations yet</div>
         ) : (

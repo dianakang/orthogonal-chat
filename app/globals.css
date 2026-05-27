@@ -6,9 +6,9 @@
 :root {
   --surface-0: 250 250 250; /* page */
   --surface-1: 255 255 255; /* panels */
-  --surface-2: 244 244 245; /* inputs */
-  --surface-3: 228 228 231; /* borders */
-  --accent: 99 102 241; /* indigo-500 */
+  --surface-2: 245 245 246; /* inputs */
+  --surface-3: 229 231 235; /* borders (gray-200) */
+  --accent: 17 24 39; /* slate-900 */
   color-scheme: light;
 }
 
@@ -17,7 +17,7 @@ html.dark {
   --surface-1: 24 24 27;
   --surface-2: 30 30 36;
   --surface-3: 39 39 47;
-  --accent: 99 102 241;
+  --accent: 244 244 245;
   color-scheme: dark;
 }
 
@@ -52,6 +52,15 @@ html.dark body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #52525b;
+}
+
+/* Hide scrollbars for horizontal chip rows, etc. */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
 }
 
 /* Prose styles for markdown in messages */

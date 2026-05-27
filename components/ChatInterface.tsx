@@ -9,6 +9,15 @@ import ThemeToggle from './ThemeToggle';
 import type { MessageData, ToolCallDisplay } from './MessageBubble';
 import type { Message } from '@/lib/db';
 
+function OrthLogoMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 64 64" fill="none" aria-hidden>
+      <path d="M32 32V6A26 26 0 0 1 58 32H32Z" fill="currentColor" />
+      <path d="M32 32V58A26 26 0 0 1 6 32H32Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 function dbMessageToDisplay(msg: Message): MessageData {
   return {
     id: msg.id,
@@ -27,6 +36,19 @@ export default function ChatInterface() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const loadRequestRef = useRef(0);
+
+  function closeSidebarIfMobile() {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      setSidebarCollapsed(true);
+    }
+  }
+
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setSidebarCollapsed(true);
+    }
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -37,22 +59,51 @@ export default function ChatInterface() {
   }, [messages, scrollToBottom]);
 
   async function loadConversation(id: string) {
+    const requestId = ++loadRequestRef.current;
     setConversationId(id);
     setMessages([]);
+    closeSidebarIfMobile();
     try {
       const res = await fetch(`/api/conversations/${id}/messages`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (requestId !== loadRequestRef.current) return;
       setMessages((data.messages ?? []).map(dbMessageToDisplay));
     } catch (err) {
+      if (requestId !== loadRequestRef.current) return;
       console.error('Failed to load messages', err);
+      setMessages([{
+        role: 'assistant',
+        content: 'Failed to load conversation history. Please try again.',
+      }]);
     }
   }
 
   function startNewConversation() {
+    loadRequestRef.current += 1;
     abortRef.current?.abort();
     setConversationId(null);
     setMessages([]);
     setStreaming(false);
+    closeSidebarIfMobile();
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
+    setStreaming(false);
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last?.role === 'assistant') {
+        updated[updated.length - 1] = {
+          ...last,
+          streaming: false,
+          statusText: undefined,
+          content: last.content || 'Stopped.',
+        };
+      }
+      return updated;
+    });
   }
 
   async function handleSend(userMessage: string) {
@@ -236,13 +287,22 @@ export default function ChatInterface() {
   return (
     <div className="flex h-screen overflow-hidden bg-surface-0">
       {!sidebarCollapsed && (
-        <ConversationSidebar
-          activeId={conversationId}
-          onSelect={loadConversation}
-          onNew={startNewConversation}
-          refreshTrigger={sidebarRefresh}
-          onCollapse={() => setSidebarCollapsed(true)}
-        />
+        <>
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            className="fixed inset-0 z-40 bg-black/30 md:hidden"
+            onClick={() => setSidebarCollapsed(true)}
+          />
+          <ConversationSidebar
+            activeId={conversationId}
+            onSelect={loadConversation}
+            onNew={startNewConversation}
+            refreshTrigger={sidebarRefresh}
+            onCollapse={() => setSidebarCollapsed(true)}
+            className="max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:shadow-xl"
+          />
+        </>
       )}
 
       <main className="relative flex flex-col flex-1 min-w-0">
@@ -262,14 +322,12 @@ export default function ChatInterface() {
             )}
 
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-xl bg-accent flex items-center justify-center shrink-0">
-                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
+              <div className="w-7 h-7 rounded-xl bg-surface-1 border border-surface-3 flex items-center justify-center shrink-0">
+                <OrthLogoMark className="w-4.5 h-4.5 text-zinc-900 dark:text-zinc-100" />
               </div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">Orthogonal Chat</div>
-                <div className="text-[11px] text-zinc-500 truncate hidden sm:block">Search & call real APIs with one key</div>
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">Orth</div>
+                <div className="text-[11px] text-zinc-500 truncate hidden sm:block">Unified API for agents</div>
               </div>
             </div>
           </div>
@@ -280,7 +338,7 @@ export default function ChatInterface() {
               onClick={() => setShowSkills((v) => !v)}
               className={`inline-flex items-center gap-2 h-9 px-3 rounded-xl text-xs font-medium border transition-colors ${
                 showSkills
-                  ? 'bg-accent text-white border-transparent'
+                  ? 'bg-accent text-white border-transparent dark:text-zinc-900'
                   : 'bg-surface-1 border-surface-3 text-zinc-600 dark:text-zinc-300 hover:bg-surface-2'
               }`}
             >
@@ -338,7 +396,7 @@ export default function ChatInterface() {
           </div>
         </div>
 
-        <ChatInput onSend={handleSend} disabled={streaming} />
+        <ChatInput onSend={handleSend} disabled={streaming} onStop={handleStop} />
       </main>
 
       {showSkills && <SkillsPanel onClose={() => setShowSkills(false)} />}

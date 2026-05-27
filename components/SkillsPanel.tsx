@@ -50,7 +50,7 @@ function ApiCard({ api }: { api: ApiEntry }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{api.name}</span>
             {api.verified && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-900/40 text-indigo-400 border border-indigo-800/50">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-2 text-zinc-700 dark:text-zinc-300 border border-surface-3">
                 verified
               </span>
             )}
@@ -93,18 +93,30 @@ export default function SkillsPanel({ onClose }: Props) {
   const [apis, setApis] = useState<ApiEntry[]>([]);
   const [totalEndpoints, setTotalEndpoints] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
+  async function loadSkills() {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch('/api/skills');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setApis(d.apis ?? []);
+      setTotalEndpoints(d.totalEndpoints ?? 0);
+    } catch (e) {
+      console.error(e);
+      setError('Could not load skills. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    fetch('/api/skills')
-      .then((r) => r.json())
-      .then((d) => {
-        setApis(d.apis ?? []);
-        setTotalEndpoints(d.totalEndpoints ?? 0);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    loadSkills();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const categories = Object.keys(CATEGORY_MAP);
@@ -134,7 +146,7 @@ export default function SkillsPanel({ onClose }: Props) {
         </div>
         <button
           onClick={onClose}
-          className="p-1.5 rounded-lg hover:bg-surface-3 text-zinc-500 hover:text-zinc-200 transition-colors"
+          className="p-1.5 rounded-lg hover:bg-surface-2 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -144,7 +156,7 @@ export default function SkillsPanel({ onClose }: Props) {
 
       {/* Search */}
       <div className="px-3 py-2 border-b border-surface-3 shrink-0">
-        <div className="flex items-center gap-2 bg-surface-2 border border-surface-3 rounded-lg px-3 py-1.5">
+        <div className="flex items-center gap-2 bg-surface-1 border border-surface-3 rounded-xl px-3 py-2 focus-within:border-accent transition-colors">
           <svg className="w-3.5 h-3.5 text-zinc-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
@@ -153,19 +165,19 @@ export default function SkillsPanel({ onClose }: Props) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search APIs…"
-            className="flex-1 bg-transparent text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-500 outline-none"
+            className="flex-1 bg-transparent text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none"
           />
         </div>
       </div>
 
       {/* Category filters */}
-      <div className="flex gap-1.5 px-3 py-2 overflow-x-auto shrink-0 border-b border-surface-3">
+      <div className="no-scrollbar flex gap-1.5 px-3 py-2 overflow-x-auto shrink-0 border-b border-surface-3">
         <button
           onClick={() => setActiveCategory(null)}
           className={`shrink-0 text-[10px] px-2 py-1 rounded-full border transition-colors ${
             !activeCategory
-              ? 'bg-accent border-accent text-white'
-              : 'border-surface-3 text-zinc-500 hover:text-zinc-200 hover:border-zinc-600'
+              ? 'bg-accent border-accent text-white dark:text-zinc-900'
+              : 'border-surface-3 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-400'
           }`}
         >
           All
@@ -176,8 +188,8 @@ export default function SkillsPanel({ onClose }: Props) {
             onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
             className={`shrink-0 text-[10px] px-2 py-1 rounded-full border transition-colors ${
               activeCategory === cat
-                ? 'bg-accent border-accent text-white'
-                : 'border-surface-3 text-zinc-500 hover:text-zinc-200 hover:border-zinc-600'
+                ? 'bg-accent border-accent text-white dark:text-zinc-900'
+                : 'border-surface-3 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:border-zinc-400'
             }`}
           >
             {cat}
@@ -193,11 +205,21 @@ export default function SkillsPanel({ onClose }: Props) {
               {[0, 1, 2].map((i) => (
                 <span
                   key={i}
-                  className="w-2 h-2 rounded-full bg-zinc-600 animate-bounce"
+                  className="w-2 h-2 rounded-full bg-zinc-400 dark:bg-zinc-600 animate-bounce"
                   style={{ animationDelay: `${i * 150}ms` }}
                 />
               ))}
             </div>
+          </div>
+        ) : error ? (
+          <div className="px-3 py-8 text-center text-sm">
+            <p className="text-zinc-500 mb-3">{error}</p>
+            <button
+              onClick={loadSkills}
+              className="inline-flex items-center justify-center h-9 px-3 rounded-xl border border-surface-3 bg-surface-1 hover:bg-surface-2 text-xs font-medium text-zinc-800 dark:text-zinc-100 transition-colors"
+            >
+              Retry
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center text-zinc-500 text-xs py-8">No APIs match your search</div>
