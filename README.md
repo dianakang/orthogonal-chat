@@ -112,7 +112,7 @@ flowchart TD
             AH["ApiHealthTracker\n20-sample rolling window\nerrorRate · avgMs"]
         end
 
-        subgraph Loop["Agentic Loop  max 6 iterations"]
+        subgraph Loop["Agentic Loop  max 10 iterations"]
             LLM["chatCompletion\ngpt-4o-mini"]
             Tools["Tool Execution\nretry + backoff"]
         end
@@ -162,20 +162,21 @@ flowchart TD
 ## How It Works
 
 1. **User sends a message** → `POST /api/chat` opens an SSE stream
-2. **Company memory** from past sessions is injected into the system prompt
-3. **Context window** is built from Postgres history + any stored summary, trimmed to ≤ 80K tokens
-4. **GPT-4o-mini** runs an agentic loop (max 6 iterations) with 4 Orthogonal tools:
+2. **Current date** is injected into the system prompt so the LLM correctly interprets relative time ("this month", "recently")
+3. **Company memory** from past sessions is injected into the system prompt
+4. **Context window** is built from Postgres history + any stored summary, trimmed to ≤ 80K tokens
+5. **GPT-4o-mini** runs an agentic loop (max 10 iterations) with 4 Orthogonal tools:
    - `search_orthogonal` — natural-language API discovery (cached 5 min)
    - `list_orthogonal_apis` — browse the full catalog
    - `get_api_details` — inspect endpoint parameters (cached 30 min)
    - `run_orthogonal_api` — execute any API call with real data
-5. **Tool calls are transparent** — the UI shows each step with expandable result panels and per-call latency
-6. **Health events stream live** — if Orthogonal is slow or erroring, the header chip and status text update in real time
-7. **Final response + tool log** are persisted atomically to Postgres
-8. **Post-response background work** runs without blocking the user:
+6. **Tool calls are transparent** — the UI shows each step with expandable result panels and per-call latency
+7. **Health events stream live** — if Orthogonal is slow or erroring, the header chip and status text update in real time
+8. **Final response + tool log** (including error and latency per call) are persisted atomically to Postgres
+9. **Post-response background work** runs without blocking the user:
    - Company facts extracted from tool results → upserted to `company_memory`
    - If the conversation is large, older messages are summarised by the LLM and stored in `conversation_summaries`
-9. **Conversation title** is generated asynchronously — the new conversation appears immediately; the title updates once generated
+10. **Conversation title** is generated asynchronously — the new conversation appears immediately; the title updates once generated
 
 ---
 
@@ -190,24 +191,27 @@ POST /api/chat
   ├─ 2. Emit health SSE event if Orthogonal is already degraded
   ├─ 3. Upsert conversation (INSERT with placeholder title → generate real title async)
   ├─ 4. Promise.all: INSERT user message + SELECT history + loadSummary()
-  ├─ 5. Inject company memory into system prompt
+  ├─ 5. Inject current date + company memory into system prompt
   ├─ 6. buildContextWindow() — trim to ≤ 80K tokens; inject stored summary if present
   ├─ 7. Emit context_pressure SSE event if > 70% full
   │
-  └─ Agentic loop (max 6 iterations):
+  └─ Agentic loop (max 10 iterations):
        ├─ chatCompletion → Orthogonal /run openai (retry w/ backoff on 5xx)
        ├─ if finish_reason == "tool_calls":
        │    ├─ for each tool:
        │    │    ├─ check in-process cache (search / details)
        │    │    ├─ execute via Orthogonal (retry on 5xx; fail-fast on 4xx)
-       │    │    ├─ on 400: auto-fetch endpoint schema, embed hint in error result
-       │    │    │    → if path has unsubstituted {variables}, say so explicitly
+       │    │    ├─ on 400/422: auto-fetch endpoint schema; lift validationErrors +
+       │    │    │    youSent to top level; embed hint → LLM self-corrects in next iter
+       │    │    │    → if path has unsubstituted {variables}, hint says so explicitly
+       │    │    ├─ on 404: embed hint directing LLM to call search_orthogonal
+       │    │    │    to find the correct API slug / endpoint path
        │    │    ├─ SSE: tool_start + tool_result (latencyMs, retrying flag)
        │    │    └─ emit health SSE if slow (> 5 s) or errored
        │    └─ append results, continue loop
        └─ if finish_reason == "stop":
             ├─ stream text word-by-word over SSE
-            ├─ INSERT assistant message + JSONB tool log (transaction)
+            ├─ INSERT assistant message + JSONB tool log with error + latencyMs (transaction)
             ├─ SSE: done
             └─ Background (non-blocking):
                  ├─ extract + upsert company facts → company_memory
@@ -221,7 +225,7 @@ Four tables, all data scoped by `user_id`:
 | Table | Purpose | Key columns |
 |---|---|---|
 | `conversations` | One row per thread | `UUID`, `user_id`, `title`, `updated_at` (auto-bumped by trigger) |
-| `messages` | Append-only message log | `user_id`, `role`, `content`, `tool_calls` (JSONB), `token_estimate` |
+| `messages` | Append-only message log | `user_id`, `role`, `content`, `tool_calls` (JSONB with `error` + `latencyMs`), `token_estimate` |
 | `company_memory` | Cross-session company facts | `(user_id, slug)` PK, `data` JSONB merged on upsert |
 | `conversation_summaries` | LLM-generated compaction summaries | `conversation_id` FK, `summary` text, `covers_message_count` |
 
@@ -255,6 +259,17 @@ Token budget: **80,000 tokens** (estimated at `chars ÷ 4`).
 - `context_pressure` SSE event → inline `NoticeBanner` in the chat
 - Banner text distinguishes "getting large" (70–90%) from "nearly full" (> 90%)
 
+### Date Awareness
+
+The system prompt is built fresh on every request and includes:
+
+- **Today's date** — e.g. "Today is Thursday, May 29, 2026"
+- **Current month mapping** — "this month" is explicitly resolved to e.g. "May 2026"
+
+This prevents the LLM from falling back on training-data dates when interpreting relative time references. When a user asks for "this month's" funding rounds, the LLM:
+1. Passes the correct `start_date` / `end_date` parameters to the API
+2. Verifies each result's date field after the call — results outside the requested range are discarded before being presented
+
 ### Company Memory
 
 After each assistant response, tool results are scanned for company identifiers (domain, name, industry, employee count, funding, etc.). Extracted facts are upserted into `company_memory` with a JSONB merge so data accumulates across sessions.
@@ -280,14 +295,19 @@ Tool call blocks show per-call latency; calls over 4 s get an amber ⚠ marker. 
 
 ### Tool Call Error Recovery
 
-When `run_orthogonal_api` returns a 400:
+The agentic loop handles 4xx errors from `run_orthogonal_api` without surfacing them as failures to the user. Each error class has its own recovery strategy:
 
-1. The server immediately calls `get_api_details` for that endpoint (0 ms if already cached)
-2. The endpoint schema + a targeted hint are embedded in the error result returned to the LLM
-3. If the path still contains unsubstituted template variables (`{domain}`, `[id]`, `:slug`), the hint calls this out explicitly: the LLM must substitute real values into the path string, not pass them in the request body
-4. The UI shows a grey "Retrying…" badge instead of a red "Error" — the self-correction is invisible to the user
+| Status | Cause | Recovery |
+|---|---|---|
+| **400 / 422** | Wrong or missing body parameters | Auto-fetch endpoint schema; surface `validationErrors` and `youSent` at top level so the LLM can see exactly which field failed and what it sent; embed hint + schema; LLM corrects and retries |
+| **404** | Wrong API slug or endpoint path | Embed hint directing LLM to call `search_orthogonal` to discover the correct slug/path, then retry |
 
-The system prompt and tool descriptions reinforce this at every turn:
+In all recoverable cases:
+- The UI shows a grey **"Retrying…"** badge instead of a red "Error" — self-correction is invisible to the user
+- The `error` and `latencyMs` fields are persisted in the JSONB tool log so they render correctly when the conversation is reloaded from the database
+- If the same `(api, path)` fails twice in a row, the LLM is instructed to abandon it and search for a different endpoint
+
+The system prompt and tool descriptions reinforce correct path substitution at every turn:
 > "PATH PARAMETERS: If the path contains template variables like {company_id}, [domain], or :slug, you MUST substitute actual values directly into the path string before calling run_orthogonal_api."
 
 ### Concurrency & Multi-User Safety
@@ -304,7 +324,7 @@ The system prompt and tool descriptions reinforce this at every turn:
 |---|---|
 | `ChatInterface` | Root chat shell — sidebar toggle, health chip, SSE event routing |
 | `ConversationSidebar` | Thread list with error state + retry button; auto-collapses on mobile |
-| `MessageBubble` | Renders user/assistant bubbles, tool call blocks (expandable), and system notice banners |
+| `MessageBubble` | Renders user/assistant bubbles, tool call blocks (expandable with error/latency restored from DB), and system notice banners |
 | `SkillsPanel` | Slide-out panel of suggested prompts grouped by API category |
 | `ThemeProvider` / `ThemeToggle` | Dark/light mode with system preference detection |
 
@@ -318,22 +338,6 @@ The system prompt and tool descriptions reinforce this at every turn:
 | Orthogonal rate limits | Retry w/ backoff | BullMQ queue per user; `busy` SSE event when queued |
 | Auth | Clerk, query-level user scoping | Add Postgres row-level security as defence-in-depth |
 | Observability | `console.error` | Propagate Orthogonal `requestId` through structured JSON logs; OpenTelemetry on agentic loop iterations and tool latency |
-
----
-
-## Known Build Configuration
-
-Next.js 15 disables the webpack build worker when a custom `webpack` function is present in `next.config.ts`. This causes only the client bundle to compile, leaving `.next/server/` empty and producing 500 errors for all page routes. The fix:
-
-```ts
-// next.config.ts
-const nextConfig: NextConfig = {
-  serverExternalPackages: ['pg'],
-  experimental: {
-    webpackBuildWorker: true, // force server + edge compilation even with custom webpack config
-  },
-};
-```
 
 ---
 

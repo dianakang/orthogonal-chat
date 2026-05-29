@@ -17,3 +17,5 @@ tsconfig.tsbuildinfo
 *.docx
 *.md
 !README.md
+generate-arch.mjs
+generate-doc.mjs
