@@ -165,7 +165,7 @@ flowchart TD
 2. **Current date** is injected into the system prompt so the LLM correctly interprets relative time ("this month", "recently")
 3. **Company memory** from past sessions is injected into the system prompt
 4. **Context window** is built from Postgres history + any stored summary, trimmed to ≤ 80K tokens
-5. **GPT-4o-mini** runs an agentic loop (max 10 iterations) with 4 Orthogonal tools:
+5. **GPT-4o-mini** runs an agentic loop (max 10 iterations) with 4 Orthogonal tools. On the first iteration, `tool_choice: 'required'` forces an immediate tool call for any non-conversational message (greetings / acknowledgements shorter than 40 characters are exempted):
    - `search_orthogonal` — natural-language API discovery (cached 5 min)
    - `list_orthogonal_apis` — browse the full catalog
    - `get_api_details` — inspect endpoint parameters (cached 30 min)
@@ -274,7 +274,7 @@ This prevents the LLM from falling back on training-data dates when interpreting
 
 After each assistant response, tool results are scanned for company identifiers (domain, name, industry, employee count, funding, etc.). Extracted facts are upserted into `company_memory` with a JSONB merge so data accumulates across sessions.
 
-At the start of each request, the 15 most recently seen companies for that user are injected into the system prompt under a `## Company Memory` heading — giving the model context about previously researched companies without spending tokens on full conversation history.
+At the start of each request, up to 15 recently seen companies are fetched from `company_memory`. They are then filtered by `filterFactsForMessage` — only companies whose slug, domain, or name appears in the current user message are injected into the system prompt under a `## Company Memory (relevant to this request)` heading. This keeps memory injection focused and avoids polluting the context with unrelated companies.
 
 ### System Health Visibility
 
@@ -327,6 +327,7 @@ The system prompt and tool descriptions reinforce correct path substitution at e
 | `MessageBubble` | Renders user/assistant bubbles, tool call blocks (expandable with error/latency restored from DB), and system notice banners |
 | `SkillsPanel` | Slide-out panel of suggested prompts grouped by API category |
 | `ThemeProvider` / `ThemeToggle` | Dark/light mode with system preference detection |
+| `ClerkProviderClient` | Client component wrapper for `ClerkProvider` with custom appearance; isolates Clerk from the server root layout |
 
 ### Scaling Path
 
