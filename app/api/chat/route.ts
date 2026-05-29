@@ -21,30 +21,60 @@ import {
   saveCompanyFacts,
   getRecentCompanyMemory,
   formatCompanyMemory,
+  filterFactsForMessage,
 } from '@/lib/company-memory';
 import { auth } from '@clerk/nextjs/server';
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
+function isConversationalOnly(message: string): boolean {
+  const trimmed = message.trim();
+  if (trimmed.length >= 40) return false;
+  return /^(hi|hello|hey|thanks|thank you|ok|okay|yo|sup|good morning|good afternoon|good evening)[\s!.?,]*$/i.test(
+    trimmed
+  );
+}
+
 function buildSystemPrompt(companyMemory: string): string {
+  const now = new Date();
+  const currentDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const currentMonth = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+
   return `You are a helpful AI assistant with access to Orthogonal's unified API platform. Through Orthogonal you can access 55+ real-world APIs — company enrichment, contact data, web scraping, search, email verification, people lookup, social media data, financial data, and much more.
+
+## Current Date
+Today is ${currentDate}. "This month" = ${currentMonth}. "This year" = ${now.getFullYear()}.
+Always use the real current date when building queries. Never use dates from training data.
 
 When the user asks for information about companies, people, contacts, or anything retrievable through an API, use the Orthogonal tools to fetch real data rather than guessing.
 
+## First response — critical:
+- NEVER open with generic questions. The user stated their goal — act on it immediately with a tool call.
+- For multi-step requests (find startups → get VP of Sales → verify email → draft outreach), execute every step in sequence using tools.
+- Only ask a clarifying question if a required parameter is truly impossible to infer.
+
 ## Strict Workflow — follow this exactly every time:
 1. Call search_orthogonal to find relevant APIs.
-2. Call get_api_details for the specific (api, path) you want to use. This is MANDATORY — never skip it. The details tell you the exact required and optional parameters.
+2. Call get_api_details for the specific (api, path) you want to use. This is MANDATORY — never skip it.
 3. Call run_orthogonal_api using only the parameters described in the details response.
-4. Summarize and present the results clearly.
+4. VERIFY results match the user's criteria (especially dates) before presenting them. Discard results that don't match.
+5. Summarize and present only verified, relevant results.
+
+## Date filtering — critical:
+- When the user asks for recent data ("this month", "this week", "recently"), you MUST pass date range parameters to the API. Use the current date values above to compute the exact start_date and end_date (or equivalent parameter names from get_api_details).
+- For "this month" use start_date = first day of ${currentMonth}, end_date = today (${currentDate}).
+- After receiving results, check each item's date field. If a result's date is outside the requested range, DISCARD it — do not present stale results to the user.
+- If the API does not support date filtering, say so explicitly and try a news/search API instead (e.g. search for "[company] funding ${currentMonth}").
 
 ## Rules:
-- NEVER call run_orthogonal_api without first calling get_api_details for that exact (api, path). Skipping this causes 400 errors.
-- PATH PARAMETERS: If the path contains template variables like {company_id}, [domain], or :slug, you MUST substitute actual values directly into the path string before calling run_orthogonal_api. For example: path "/v3/companies/{domain}/news" with domain "stripe.com" becomes path "/v3/companies/stripe.com/news". Never pass template variable names as-is.
-- BODY vs QUERY: Pass only non-path parameters (query params, request body fields) in the body object. Path variables go in the path string, not in body.
-- If run_orthogonal_api returns a 4xx/5xx error, examine the endpointDetails hint in the error result and retry immediately with corrected parameters.
+- NEVER call run_orthogonal_api without first calling get_api_details for that exact (api, path).
+- PATH PARAMETERS: Substitute all template variables (e.g. {domain}, [id], :slug) with real values directly in the path string before calling run_orthogonal_api.
+- BODY vs QUERY: Path variables go in the path string; everything else goes in body.
+- If run_orthogonal_api returns an error with a "hint" field: read validationErrors, youSent, and endpointDetails — fix all issues in one correction and retry.
+- If the same (api, path) fails twice, stop and search for a different API.
 - Do not guess parameter names or shapes. Only use what get_api_details documents.
-- If an API call fails twice, try a different API from the search results.
-- Be transparent: if no data is found, say so and suggest alternatives.${companyMemory ? `\n\n${companyMemory}` : ''}`;
+- DOMAIN LOOKUPS: If you need a domain but only have a company name, search for it first before calling enrichment APIs.
+- Be transparent: if no data matching the user's criteria is found, say so clearly.${companyMemory ? `\n\n${companyMemory}\nUse company memory only when the user's current message relates to those companies.` : ''}`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -147,7 +177,10 @@ export async function POST(req: Request) {
         ]);
 
         // ── Inject company memory into system prompt ──────────────────────────
-        const companyFacts = await getRecentCompanyMemory(userId);
+        const companyFacts = filterFactsForMessage(
+          await getRecentCompanyMemory(userId),
+          userMessage
+        );
         const systemPrompt = buildSystemPrompt(formatCompanyMemory(companyFacts));
 
         // ── Build context window ──────────────────────────────────────────────
@@ -177,11 +210,11 @@ export async function POST(req: Request) {
           })),
         ];
 
-        const toolCallsForDb: Array<{ name: string; input: unknown; result: unknown }> = [];
+        const toolCallsForDb: Array<{ name: string; input: unknown; result: unknown; error?: string | null; latencyMs?: number }> = [];
         let finalResponseText = '';
 
         // ── Agentic loop ──────────────────────────────────────────────────────
-        const MAX_ITERATIONS = 6;
+        const MAX_ITERATIONS = 10;
         let iterations = 0;
 
         while (iterations < MAX_ITERATIONS) {
@@ -189,7 +222,8 @@ export async function POST(req: Request) {
           let response: Awaited<ReturnType<typeof chatCompletion>>;
 
           try {
-            response = await chatCompletion(messages, ORTHOGONAL_TOOLS);
+            const forceTools = iterations === 1 && !isConversationalOnly(userMessage);
+            response = await chatCompletion(messages, ORTHOGONAL_TOOLS, 'gpt-4o-mini', forceTools ? 'required' : 'auto');
           } catch (err) {
             if (
               err instanceof OrthogonalError &&
@@ -250,7 +284,7 @@ export async function POST(req: Request) {
               } catch (err) {
                 if (err instanceof OrthogonalError) {
                   toolError = `${err.message} (status: ${err.status}, code: ${err.code})`;
-                  if (err.status === 400 && name === 'run_orthogonal_api') {
+                  if ((err.status === 400 || err.status === 422) && name === 'run_orthogonal_api') {
                     isRecoverable400 = true;
                     // Fetch (or read from cache — 0ms if already loaded) the
                     // endpoint schema and embed it so the LLM fixes params directly.
@@ -263,15 +297,37 @@ export async function POST(req: Request) {
                     } catch { /* non-fatal */ }
                     // Check if the path still has unsubstituted template variables
                     const hasUnsubstitutedPath = /[{[:]/.test(input.path as string);
+                    // Lift validation errors to top level so the LLM doesn't need
+                    // to navigate nested payload.data.errors to understand what failed.
+                    let validationErrors: unknown = undefined;
+                    try {
+                      const payloadData = ((err.payload as Record<string, unknown>)?.data) as Record<string, unknown>;
+                      if (payloadData?.errors) validationErrors = payloadData.errors;
+                    } catch { /* non-fatal */ }
                     toolResult = {
                       error: toolError,
                       status: err.status,
                       code: err.code,
-                      payload: err.payload ?? null,
+                      validationErrors: validationErrors ?? null,
+                      youSent: { api: input.api, path: input.path, body: input.body },
                       hint: hasUnsubstitutedPath
-                        ? `The path "${input.path}" still contains template variables. Replace all {variable}, [variable], or :variable placeholders with real values before retrying. Then retry run_orthogonal_api with the corrected path.`
-                        : 'Your request parameters did not match the endpoint schema. Correct them using endpointDetails below and retry run_orthogonal_api.',
+                        ? `PATH ERROR: The path "${input.path}" still contains unsubstituted template variables. Replace every {variable}, [variable], or :variable with a real value in the path string, then retry run_orthogonal_api.`
+                        : `VALIDATION FAILED (HTTP ${err.status}): The fields in youSent.body did not satisfy the API requirements. Check validationErrors above for the specific field errors. Use endpointDetails below to see required/optional fields, correct youSent.body, and retry run_orthogonal_api.`,
                       endpointDetails,
+                    };
+                  } else if (err.status === 404 && (name === 'run_orthogonal_api' || name === 'get_api_details')) {
+                    // 404 means wrong API slug or path — tell the LLM to re-search
+                    isRecoverable400 = true;
+                    let payloadHint = '';
+                    try {
+                      payloadHint = ((err.payload as Record<string, unknown>)?.hint as string) ?? '';
+                    } catch { /* non-fatal */ }
+                    toolResult = {
+                      error: toolError,
+                      status: 404,
+                      code: err.code,
+                      payload: err.payload ?? null,
+                      hint: `NOT FOUND (404): The api "${input.api}" or path "${input.path}" does not exist on Orthogonal. ${payloadHint ? payloadHint + '. ' : ''}Call search_orthogonal with a relevant description to discover the correct API slug and endpoint path, then call get_api_details and retry run_orthogonal_api.`,
                     };
                   } else {
                     toolResult = { error: toolError, status: err.status, code: err.code, payload: err.payload ?? null };
@@ -283,8 +339,7 @@ export async function POST(req: Request) {
               }
               const toolMs = Date.now() - toolStart;
 
-              // For recoverable 400s, suppress the red "Error" badge in the UI —
-              // it looks alarming for what is just a self-corrected parameter issue.
+              // For recoverable errors, suppress the red "Error" badge in the UI.
               send({
                 type: 'tool_result',
                 name,
@@ -293,7 +348,15 @@ export async function POST(req: Request) {
                 latencyMs: toolMs,
                 retrying: isRecoverable400,
               });
-              toolCallsForDb.push({ name, input, result: toolResult });
+              // Persist error and latencyMs so they render correctly when the
+              // conversation is loaded from the database later.
+              toolCallsForDb.push({
+                name,
+                input,
+                result: toolResult,
+                error: isRecoverable400 ? null : (toolError ?? null),
+                latencyMs: toolMs,
+              });
 
               // Surface degraded state after a slow or failed tool call
               if (toolMs > 5000 || toolError) {

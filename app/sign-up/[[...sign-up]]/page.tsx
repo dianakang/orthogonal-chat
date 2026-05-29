@@ -1,14 +1,14 @@
-import { auth } from '@clerk/nextjs/server';
 import { SignUp } from '@clerk/nextjs';
-import { redirect } from 'next/navigation';
+import Link from 'next/link';
 
-export default async function Page() {
-  const { userId } = await auth({ treatPendingAsSignedOut: true });
-  if (userId) redirect('/chat');
-
+export default function SignUpPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface-0 px-6">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-surface-0 px-6 py-10">
       <SignUp
+        routing="path"
+        path="/sign-up"
+        signInUrl="/sign-in"
+        forceRedirectUrl="/chat"
         appearance={{
           elements: {
             card: 'rounded-3xl border border-surface-3 bg-surface-1 shadow-sm',
@@ -18,7 +18,11 @@ export default async function Page() {
           },
         }}
       />
+      <p className="mt-6 text-xs text-zinc-500">
+        <Link href="/" className="underline hover:text-zinc-700 dark:hover:text-zinc-300">
+          Back to home
+        </Link>
+      </p>
     </div>
   );
 }
-

@@ -222,12 +222,13 @@ export function getDetails(api: string, path: string): Promise<DetailsResponse> 
 export async function chatCompletion(
   messages: ChatMessage[],
   tools?: OpenAITool[],
-  model = 'gpt-4o-mini'
+  model = 'gpt-4o-mini',
+  toolChoice: 'auto' | 'required' = 'auto'
 ): Promise<ChatResponse> {
   const body: Record<string, unknown> = { model, messages, max_tokens: 8096 };
   if (tools?.length) {
     body.tools = tools;
-    body.tool_choice = 'auto';
+    body.tool_choice = toolChoice;
   }
   const result = await runApi('openai', '/chat/completions', body);
   return result.data as ChatResponse;
@@ -291,7 +292,7 @@ export const ORTHOGONAL_TOOLS: OpenAITool[] = [
     function: {
       name: 'search_orthogonal',
       description:
-        "Search Orthogonal's API catalog using natural language to find relevant APIs. Always search first if you don't know the slug.",
+        "Search Orthogonal's API catalog using natural language to find relevant APIs. Call this immediately when the user asks for data, research, contacts, or any actionable task — do not ask clarifying questions first.",
       parameters: {
         type: 'object',
         properties: {

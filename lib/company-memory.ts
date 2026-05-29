@@ -105,5 +105,23 @@ export function formatCompanyMemory(facts: CompanyFact[]): string {
     if (data.description) parts.push((data.description as string).slice(0, 120));
     return `- ${parts.join(' | ')}`;
   });
-  return `## Company Memory (from previous sessions)\n${lines.join('\n')}`;
+  return `## Company Memory (relevant to this request)\n${lines.join('\n')}`;
+}
+
+// Only inject memory when the current message mentions those companies.
+export function filterFactsForMessage(facts: CompanyFact[], userMessage: string): CompanyFact[] {
+  const lower = userMessage.toLowerCase();
+  return facts.filter(({ slug, data }) => {
+    const slugLower = slug.toLowerCase();
+    if (lower.includes(slugLower)) return true;
+
+    const domain = (data.domain as string | undefined)?.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+    if (domain && lower.includes(domain)) return true;
+
+    const name = (data.name as string | undefined)?.toLowerCase();
+    if (name && name.length >= 3 && lower.includes(name)) return true;
+
+    // Match hyphenated slug parts (e.g. "tesla-renter" when user says "tesla")
+    return slugLower.split('-').some((part) => part.length >= 4 && lower.includes(part));
+  });
 }

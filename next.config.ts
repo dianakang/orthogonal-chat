@@ -2,8 +2,12 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ['pg'],
-  experimental: {
-    webpackBuildWorker: true,
+  webpack: (config) => {
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: ['**/node_modules/**', '**/clerk-nextjs/**'],
+    };
+    return config;
   },
 };
 

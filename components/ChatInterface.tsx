@@ -69,6 +69,7 @@ export default function ChatInterface() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const loadRequestRef = useRef(0);
+  const streamRequestRef = useRef(0);
 
   function closeSidebarIfMobile() {
     if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
@@ -122,6 +123,7 @@ export default function ChatInterface() {
 
   function startNewConversation() {
     loadRequestRef.current += 1;
+    streamRequestRef.current += 1;
     abortRef.current?.abort();
     setConversationId(null);
     setMessages([]);
@@ -130,6 +132,7 @@ export default function ChatInterface() {
   }
 
   function handleStop() {
+    streamRequestRef.current += 1;
     abortRef.current?.abort();
     setStreaming(false);
     setMessages((prev) => {
@@ -149,6 +152,8 @@ export default function ChatInterface() {
 
   async function handleSend(userMessage: string) {
     if (streaming) return;
+
+    const streamId = ++streamRequestRef.current;
 
     const userMsg: MessageData = { role: 'user', content: userMessage };
     const assistantMsg: MessageData = {
@@ -204,10 +209,11 @@ export default function ChatInterface() {
           } catch {
             continue;
           }
-          handleSseEvent(event);
+          handleSseEvent(event, streamId);
         }
       }
     } catch (err: unknown) {
+      if (streamId !== streamRequestRef.current) return;
       if (err instanceof Error && err.name === 'AbortError') return;
       const message =
         err instanceof Error
@@ -231,6 +237,7 @@ export default function ChatInterface() {
         return updated;
       });
     } finally {
+      if (streamId !== streamRequestRef.current) return;
       setStreaming(false);
       setSidebarRefresh((n) => n + 1);
       setMessages((prev) => {
@@ -244,7 +251,8 @@ export default function ChatInterface() {
     }
   }
 
-  function handleSseEvent(event: Record<string, unknown>) {
+  function handleSseEvent(event: Record<string, unknown>, streamId: number) {
+    if (streamId !== streamRequestRef.current) return;
     switch (event.type) {
       case 'conversation_created': {
         const conv = event.conversation as { id: string };

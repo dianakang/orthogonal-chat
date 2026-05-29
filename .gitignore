@@ -8,3 +8,12 @@ tsconfig.tsbuildinfo
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Local Clerk scaffold (separate app — do not watch/compile with main app)
+/clerk-nextjs/
+
+# Local docs and diagrams (not for GitHub)
+*.excalidraw
+*.docx
+*.md
+!README.md
