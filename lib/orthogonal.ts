@@ -203,10 +203,15 @@ export function searchApis(query: string): Promise<SearchResponse> {
   });
 }
 
-export function runApi(api: string, path: string, body: Record<string, unknown>): Promise<RunResponse> {
+export function runApi(
+  api: string,
+  path: string,
+  body: Record<string, unknown>,
+  query?: Record<string, unknown>
+): Promise<RunResponse> {
   return orthogonalFetch<RunResponse>('/run', {
     method: 'POST',
-    body: JSON.stringify({ api, path, body }),
+    body: JSON.stringify({ api, path, body, ...(query && Object.keys(query).length ? { query } : {}) }),
   });
 }
 
@@ -276,7 +281,8 @@ export async function executeOrthogonalTool(
       return runApi(
         input.api as string,
         input.path as string,
-        (input.body as Record<string, unknown>) ?? {}
+        (input.body as Record<string, unknown>) ?? {},
+        (input.query as Record<string, unknown>) ?? undefined
       );
 
     default:
@@ -339,7 +345,7 @@ export const ORTHOGONAL_TOOLS: OpenAITool[] = [
     function: {
       name: 'run_orthogonal_api',
       description:
-        'Execute an API call through Orthogonal. MUST call get_api_details first. CRITICAL: substitute all path template variables (e.g. {domain}, [id], :slug) with real values directly in the path string — never leave placeholders. Pass only non-path params in body.',
+        'Execute an API call through Orthogonal. MUST call get_api_details first. CRITICAL: substitute all path template variables (e.g. {domain}, [id], :slug) with real values directly in the path string — never leave placeholders. For GET endpoints (bodyParams is empty, queryParams has entries) pass params in "query". For POST endpoints pass params in "body".',
       parameters: {
         type: 'object',
         properties: {
@@ -351,7 +357,11 @@ export const ORTHOGONAL_TOOLS: OpenAITool[] = [
           },
           body: {
             type: 'object',
-            description: 'Non-path parameters (query params or body fields) as documented by get_api_details. Do not include path variables here.',
+            description: 'POST body parameters as documented by get_api_details. For GET endpoints leave this as {}.',
+          },
+          query: {
+            type: 'object',
+            description: 'URL query parameters for GET endpoints (use when endpointDetails shows queryParams and bodyParams is empty). E.g. {"limit": 50, "location": "New York"}.',
           },
         },
         required: ['api', 'path', 'body'],

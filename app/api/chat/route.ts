@@ -27,54 +27,55 @@ import { auth } from '@clerk/nextjs/server';
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-function isConversationalOnly(message: string): boolean {
-  const trimmed = message.trim();
-  if (trimmed.length >= 40) return false;
-  return /^(hi|hello|hey|thanks|thank you|ok|okay|yo|sup|good morning|good afternoon|good evening)[\s!.?,]*$/i.test(
-    trimmed
-  );
-}
 
 function buildSystemPrompt(companyMemory: string): string {
   const now = new Date();
   const currentDate = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const currentMonth = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
 
-  return `You are a helpful AI assistant with access to Orthogonal's unified API platform. Through Orthogonal you can access 55+ real-world APIs — company enrichment, contact data, web scraping, search, email verification, people lookup, social media data, financial data, and much more.
+  return `You are an AI assistant connected to Orthogonal — a unified API platform with 55+ real-world APIs (company enrichment, contacts, web scraping, search, email verification, people lookup, social media, financial data, news, and more).
 
-## Current Date
-Today is ${currentDate}. "This month" = ${currentMonth}. "This year" = ${now.getFullYear()}.
-Always use the real current date when building queries. Never use dates from training data.
+Today is ${currentDate}.
 
-When the user asks for information about companies, people, contacts, or anything retrievable through an API, use the Orthogonal tools to fetch real data rather than guessing.
+## How to decide whether to use a tool
 
-## First response — critical:
-- NEVER open with generic questions. The user stated their goal — act on it immediately with a tool call.
-- For multi-step requests (find startups → get VP of Sales → verify email → draft outreach), execute every step in sequence using tools.
-- Only ask a clarifying question if a required parameter is truly impossible to infer.
+Ask yourself: "Could an API realistically return this exact data right now?"
+- If yes or possibly → call search_orthogonal to find the right API, then use it.
+- If clearly no (pure reasoning, math, writing, opinions) → answer directly from your knowledge.
 
-## Strict Workflow — follow this exactly every time:
-1. Call search_orthogonal to find relevant APIs.
-2. Call get_api_details for the specific (api, path) you want to use. This is MANDATORY — never skip it.
-3. Call run_orthogonal_api using only the parameters described in the details response.
-4. VERIFY results match the user's criteria (especially dates) before presenting them. Discard results that don't match.
-5. Summarize and present only verified, relevant results.
+When uncertain, search first. The search result will tell you whether a suitable API exists.
 
-## Date filtering — critical:
-- When the user asks for recent data ("this month", "this week", "recently"), you MUST pass date range parameters to the API. Use the current date values above to compute the exact start_date and end_date (or equivalent parameter names from get_api_details).
-- For "this month" use start_date = first day of ${currentMonth}, end_date = today (${currentDate}).
-- After receiving results, check each item's date field. If a result's date is outside the requested range, DISCARD it — do not present stale results to the user.
-- If the API does not support date filtering, say so explicitly and try a news/search API instead (e.g. search for "[company] funding ${currentMonth}").
+## Tool workflow
 
-## Rules:
-- NEVER call run_orthogonal_api without first calling get_api_details for that exact (api, path).
-- PATH PARAMETERS: Substitute all template variables (e.g. {domain}, [id], :slug) with real values directly in the path string before calling run_orthogonal_api.
-- BODY vs QUERY: Path variables go in the path string; everything else goes in body.
-- If run_orthogonal_api returns an error with a "hint" field: read validationErrors, youSent, and endpointDetails — fix all issues in one correction and retry.
-- If the same (api, path) fails twice, stop and search for a different API.
-- Do not guess parameter names or shapes. Only use what get_api_details documents.
-- DOMAIN LOOKUPS: If you need a domain but only have a company name, search for it first before calling enrichment APIs.
-- Be transparent: if no data matching the user's criteria is found, say so clearly.${companyMemory ? `\n\n${companyMemory}\nUse company memory only when the user's current message relates to those companies.` : ''}`;
+1. **search_orthogonal** — find candidate APIs for the user's request.
+2. **Pick ONE** — choose the single endpoint whose description most precisely matches what was asked. Do not pre-fetch details for multiple candidates at once.
+3. **get_api_details(api, path)** — fetch the full schema. MANDATORY before every run_orthogonal_api call.
+4. **run_orthogonal_api** — use only clearly documented fields. Start with the minimum required parameters; never invent nested filter DSL formats unless get_api_details shows an exact example.
+5. **On failure** — the error result contains a \`hint\` field that tells you exactly what to do next (fix and retry, move to next API, or stop). Follow the hint strictly.
+6. **Verify** — confirm results match the user's request in content and data type. Discard mismatches.
+7. **Present** — if results are good, summarize clearly. If all attempts failed, tell the user what you tried, why it failed, and suggest a more specific query or a different approach. Never just list API errors.
+
+## Execution rules
+
+- Substitute every path template variable ({id}, [slug], :param) with a real value in the path string. Never leave placeholders.
+- On a 404: the api slug or path is wrong — re-run search_orthogonal to find the correct one.
+- For date-sensitive requests: derive explicit date parameters from today (${currentDate}); discard results outside the requested range.
+- If you need a domain but only have a company name, look up the domain first.
+- **Never guess parameter names, filter_type values, or operator strings** — copy them verbatim from get_api_details. If a field is not listed in the docs, it does not exist.
+- If Orthogonal has no suitable API, say so and answer from your own knowledge where possible.
+
+## GET vs POST parameters
+
+Check \`endpointDetails.endpoint.method\` before calling run_orthogonal_api:
+- **POST** (bodyParams has entries): put all non-path params in \`body\`, omit \`query\`.
+- **GET** (bodyParams is empty, queryParams has entries): put all params in \`query\`, pass \`body: {}\`.
+
+Never send params in \`body\` for a GET endpoint — it will fail with HTTP 400.
+
+## Filter / operator accuracy
+
+- Copy operator strings exactly as documented. E.g. Crustdata fuzzy-match is \`"(.)"\` — never abbreviate to \`"."\`.
+- Use only filter_type values explicitly listed in the endpoint docs. Do not invent field names (e.g. \`position_title\`) if they are not in the list.
+- For numeric range filters, prefer the documented numeric field (e.g. \`employee_metrics.latest_count\` with \`>=\`/\`<=\`) over bucket-style fields like \`employee_count_range\` which accept only predefined string values.${companyMemory ? `\n\n${companyMemory}\nApply company memory only when directly relevant to the user's current request.` : ''}`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -160,12 +161,16 @@ export async function POST(req: Request) {
             .catch(() => {/* non-fatal — placeholder title is fine */});
         }
 
-        // ── Parallel: save user message + fetch history + load summary ────────
-        const [, history, summary] = await Promise.all([
-          query(
-            'INSERT INTO messages (conversation_id, user_id, role, content, token_estimate) VALUES ($1, $2, $3, $4, $5)',
-            [conversationId, userId, 'user', userMessage, estimateTokens(userMessage)]
-          ),
+        // ── Save user message, then fetch history + summary in parallel ──────
+        // INSERT must complete before SELECT so the current message is visible
+        // to the history query (parallel execution causes a race where SELECT
+        // can run before the INSERT commits, making the LLM miss the new message).
+        await query(
+          'INSERT INTO messages (conversation_id, user_id, role, content, token_estimate) VALUES ($1, $2, $3, $4, $5)',
+          [conversationId, userId, 'user', userMessage, estimateTokens(userMessage)]
+        );
+
+        const [history, summary] = await Promise.all([
           query<Message>(
             `SELECT m.* FROM messages m
              JOIN conversations c ON c.id = m.conversation_id
@@ -213,6 +218,11 @@ export async function POST(req: Request) {
         const toolCallsForDb: Array<{ name: string; input: unknown; result: unknown; error?: string | null; latencyMs?: number }> = [];
         let finalResponseText = '';
 
+        // Track how many times each (api, path) has been attempted so we can
+        // tell the model when to stop retrying and move on.
+        const apiAttemptCounts = new Map<string, number>();
+        const exhaustedApis = new Set<string>();
+
         // ── Agentic loop ──────────────────────────────────────────────────────
         const MAX_ITERATIONS = 10;
         let iterations = 0;
@@ -222,8 +232,7 @@ export async function POST(req: Request) {
           let response: Awaited<ReturnType<typeof chatCompletion>>;
 
           try {
-            const forceTools = iterations === 1 && !isConversationalOnly(userMessage);
-            response = await chatCompletion(messages, ORTHOGONAL_TOOLS, 'gpt-4o-mini', forceTools ? 'required' : 'auto');
+            response = await chatCompletion(messages, ORTHOGONAL_TOOLS, 'gpt-4o-mini', 'auto');
           } catch (err) {
             if (
               err instanceof OrthogonalError &&
@@ -286,6 +295,12 @@ export async function POST(req: Request) {
                   toolError = `${err.message} (status: ${err.status}, code: ${err.code})`;
                   if ((err.status === 400 || err.status === 422) && name === 'run_orthogonal_api') {
                     isRecoverable400 = true;
+                    // Track attempts per (api, path) so we know when to stop.
+                    const apiKey = `${input.api}:${input.path}`;
+                    const attempt = (apiAttemptCounts.get(apiKey) ?? 0) + 1;
+                    apiAttemptCounts.set(apiKey, attempt);
+                    if (attempt >= 2) exhaustedApis.add(apiKey);
+
                     // Fetch (or read from cache — 0ms if already loaded) the
                     // endpoint schema and embed it so the LLM fixes params directly.
                     let endpointDetails: unknown = null;
@@ -304,6 +319,15 @@ export async function POST(req: Request) {
                       const payloadData = ((err.payload as Record<string, unknown>)?.data) as Record<string, unknown>;
                       if (payloadData?.errors) validationErrors = payloadData.errors;
                     } catch { /* non-fatal */ }
+
+                    // Build a stop signal when this (api, path) has been tried twice,
+                    // or when multiple different APIs have been exhausted.
+                    const stopSignal = attempt >= 2
+                      ? exhaustedApis.size >= 2
+                        ? ` STOP USING TOOLS: You have now exhausted ${exhaustedApis.size} different API endpoints. Do not call run_orthogonal_api again. Give the user your best answer: explain what you tried, why it failed, and suggest a more specific or different query they could try.`
+                        : ` This is attempt ${attempt} on "${input.api}${input.path}" — do NOT retry this endpoint again. Try the next best API from your search results instead.`
+                      : ` This is attempt ${attempt} of 2. Read endpointDetails carefully, use only clearly documented fields, and retry once with the corrected body.`;
+
                     toolResult = {
                       error: toolError,
                       status: err.status,
@@ -311,8 +335,8 @@ export async function POST(req: Request) {
                       validationErrors: validationErrors ?? null,
                       youSent: { api: input.api, path: input.path, body: input.body },
                       hint: hasUnsubstitutedPath
-                        ? `PATH ERROR: The path "${input.path}" still contains unsubstituted template variables. Replace every {variable}, [variable], or :variable with a real value in the path string, then retry run_orthogonal_api.`
-                        : `VALIDATION FAILED (HTTP ${err.status}): The fields in youSent.body did not satisfy the API requirements. Check validationErrors above for the specific field errors. Use endpointDetails below to see required/optional fields, correct youSent.body, and retry run_orthogonal_api.`,
+                        ? `PATH ERROR: The path "${input.path}" still contains unsubstituted template variables. Replace every {variable}, [variable], or :variable with a real value in the path string, then retry run_orthogonal_api.${stopSignal}`
+                        : `VALIDATION FAILED (HTTP ${err.status}): The fields in youSent.body did not satisfy the API requirements. Check validationErrors for specific errors, or use only the required fields shown in endpointDetails.${stopSignal}`,
                       endpointDetails,
                     };
                   } else if (err.status === 404 && (name === 'run_orthogonal_api' || name === 'get_api_details')) {
